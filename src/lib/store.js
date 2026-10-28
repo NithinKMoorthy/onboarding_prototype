@@ -8,7 +8,7 @@ const KEY = 'atx-onboarding-proto-v1';
 export const defaults = () => ({
   service: null,
   homeBannerX: false, cmBannerX: false,
-  sources: [], analyses: [], schedules: [], remediations: [],
+  sources: [], analyses: [], schedules: [], remediations: [], runs: [],
   fstate: {}, ftrans: {}, infra: {}, seq: 1,
 });
 

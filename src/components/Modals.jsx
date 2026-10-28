@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { closeModal, commit, db, defaults, nid, openModal, replaceState, resetAll, toast, ui, useStore } from '../lib/store';
 import { go } from '../lib/router';
+import { returningState } from '../lib/scenarios';
 import { ACCOUNT, PROVIDERS, REGION, STACKS, TYPES, aFindings, aStatus, allFindings, fStatus, fTrans, langOf, remReady, remStatus, timeline, typeName } from '../lib/domain';
 import { fmtDT, hash, plural } from '../lib/format';
 import { BUCKET_ERR, BUCKET_RE } from '../console/EnableWebApp';
@@ -50,9 +51,21 @@ function FeedbackModal() {
 }
 
 function ResetModal() {
+  const [as, setAs] = useState('new');
+  function reset() {
+    resetAll();
+    if (as === 'returning') { replaceState(returningState()); go('#/web/cm/findings'); }
+    else go('#/');
+  }
   return (
-    <Modal title="Reset prototype?" footer={<><CancelButton /><button className="btn primary" onClick={() => { resetAll(); go('#/'); }}>Reset</button></>}>
-      <p>This clears all prototype data (service, sources, analyses, findings, infrastructure) and returns to the console landing page.</p>
+    <Modal title="Reset prototype?" footer={<><CancelButton /><button className="btn primary" onClick={reset}>Reset</button></>}>
+      <p>This clears all prototype data (service, sources, analyses, findings, infrastructure). Choose where to start.</p>
+      <div style={{ marginTop: 14 }}>
+        <Choice name="m-reset" checked={as === 'new'} onChange={() => setAs('new')} label="New user"
+          desc="Nothing set up. Starts at the console landing page." />
+        <Choice name="m-reset" checked={as === 'returning'} onChange={() => setAs('returning')} label="Returning user"
+          desc="Web app enabled and acme-platform connected. Tech debt (comprehensive) ran once on 6 repositories 4 weeks ago and was never scheduled." />
+      </div>
     </Modal>
   );
 }
@@ -315,10 +328,12 @@ function CompareTypesModal() {
         {TYPES.map(t => (
           <div key={t.id} className="row" style={{ alignItems: 'flex-start' }}>
             <span className={`ico ${t.ico}`}><Icon n={t.icon} s={22} /></span>
-            <div><b>{t.name}</b><div className="muted">{t.desc}</div></div>
+            <div className="grow"><b>{t.name}</b><div className="muted">{t.desc}</div></div>
+            <a href={`#/web/cm/new?type=${t.id}`} className="small" style={{ fontWeight: 700, whiteSpace: 'nowrap', textDecoration: 'none' }}>Run this analysis</a>
           </div>
         ))}
       </div>
     </Modal>
   );
 }
+

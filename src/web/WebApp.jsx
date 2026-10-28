@@ -1,5 +1,7 @@
-import { commit, openModal, setUi, ui, useStore } from '../lib/store';
-import { REGION, USER_ARN } from '../lib/domain';
+import { commit, openModal, replaceState, resetAll, setUi, ui, useStore } from '../lib/store';
+import { go } from '../lib/router';
+import { returningState } from '../lib/scenarios';
+import { REGION, USER_ARN, showLanding } from '../lib/domain';
 import { Icon } from '../components/ui';
 import Home from './Home';
 import AskPanel from './AskPanel';
@@ -26,8 +28,8 @@ export default function WebApp({ parts }) {
 
   const sec = parts[0] || '';
   const isCm = sec === 'cm';
-  // Get started and Run new analysis are focused pages: navigation open, no banner or Ask panel.
-  const focused = isCm && ['get-started', 'new'].includes(parts[1]);
+  // The first-run landing, Get started, Run new analysis and run-group pages are focused: navigation open, no banner or Ask panel.
+  const focused = isCm && (['get-started', 'new', 'runs'].includes(parts[1]) || (!parts[1] && showLanding(S)));
   const bannerKey = isCm ? 'cmBannerX' : 'homeBannerX';
   const banner = S[bannerKey] || focused ? null : isCm
     ? <><strong>AWS Transform continuous modernization</strong> now supports AWS-managed infrastructure for analysis. You can run analyses without provisioning or managing your own compute infrastructure. <a href="#" onClick={e => e.preventDefault()}>Learn more <Icon n="ext" s={14} /></a></>
@@ -70,7 +72,7 @@ export default function WebApp({ parts }) {
         {/* Keep the panel within the viewport below the banners. */}
         {showAsk && <AskPanel offset={53 + 56 * ((flash ? 1 : 0) + (banner ? 1 : 0))} />}
       </div>
-      <WebFooter />
+      <WebFooter returning={isCm && parts[1] === 'findings'} />
     </div>
   );
 }
@@ -90,13 +92,15 @@ function WebTop() {
   );
 }
 
-function WebFooter() {
+function WebFooter({ returning }) {
   const noop = e => e.preventDefault();
   return (
     <footer className="w-foot">
       <a href="#" onClick={noop}>Privacy</a><a href="#" onClick={noop}>Site terms</a><a href="#" onClick={noop}>Cookie preferences</a><a href="#" onClick={noop}>Documentation</a>
       <span>© 2026, Amazon Web Services, Inc. or its affiliates. All rights reserved.</span>
-      <button className="reset" onClick={() => openModal('reset')}>Reset prototype</button>
+      {/* Prototype shortcut: reload the returning-user scenario (stale one-off analysis) without going through Reset. */}
+      {returning && <button className="reset" onClick={() => { resetAll(); replaceState(returningState()); go('#/web/cm/findings'); }}>Load returning user</button>}
+      <button className="reset" style={returning ? { marginLeft: 0 } : undefined} onClick={() => openModal('reset')}>Reset prototype</button>
     </footer>
   );
 }

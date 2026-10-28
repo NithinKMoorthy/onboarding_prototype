@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { commit, openModal, toast, useStore } from '../../lib/store';
-import { TRANSFORMS, TYPES, allFindings, fStatus, fTrans, remReady, typeName } from '../../lib/domain';
-import { fmtDate, fmtTime, plural } from '../../lib/format';
+import { TRANSFORMS, TYPES, allFindings, fStatus, fTrans, remReady, staleness, typeName } from '../../lib/domain';
+import { fmtDate, plural } from '../../lib/format';
 import { Alert, FilterSelect, Icon, SearchInput, Sev, Status, usePager, useSelection } from '../../components/ui';
+import { RerunNotice, StaleBanner } from './StaleBanner';
 
 export default function Findings({ q }) {
   useStore();
@@ -22,6 +23,7 @@ export default function Findings({ q }) {
   const ready = remReady();
   const allOnPage = page.length > 0 && page.every(x => sel.has(x.key));
   const repos = [...new Set(all.map(x => x.repo))].sort();
+  const stale = !!staleness();
 
   function dismiss() {
     commit(S => openSel.forEach(x => { S.fstate[x.key] = 'Dismissed'; }));
@@ -31,7 +33,9 @@ export default function Findings({ q }) {
 
   return (
     <>
-      {!ready && !alertX && (
+      <StaleBanner />
+      <RerunNotice />
+      {!ready && !alertX && !stale && (
         <Alert type="info" title="Infrastructure for remediation is not ready" style={{ marginBottom: 18 }} onDismiss={() => setAlertX(true)}
           actions={<a className="btn small" href="#/web/cm/settings?how=1">View instruction</a>}>
           Setup infrastructure before creating remediations.
@@ -40,6 +44,7 @@ export default function Findings({ q }) {
       <div className="spread c-header">
         <h2>Findings <span className="counter">({list.length})</span></h2>
         <div className="row">
+          {f.repo && <a className="btn" href={`#/web/cm/new?repo=${encodeURIComponent(f.repo)}`}>Analyze {f.repo}</a>}
           <button className="btn" onClick={dismiss} disabled={!openSel.length}>Dismiss</button>
           <button className="btn primary" disabled={!openSel.length || !ready} title={ready ? '' : 'Deploy remediation infrastructure first'}
             onClick={() => openModal('remediate', { keys: openSel.map(x => x.key), onDone: sel.clear })}>Create remediation</button>
@@ -64,7 +69,7 @@ export default function Findings({ q }) {
           <thead>
             <tr>
               <th className="cb"><input type="checkbox" aria-label="Select all on page" checked={allOnPage} disabled={!page.length} onChange={() => sel.setMany(page.map(x => x.key), !allOnPage)} /></th>
-              <th>Finding</th><th>Severity</th><th>Status</th><th>Transformation <Icon n="edit" s={13} /></th><th>Date reported</th><th>Time</th><th>Analysis type</th><th>Repository</th>
+              <th>Finding</th><th>Severity</th><th>Status</th><th>Transformation <Icon n="edit" s={13} /></th><th>Date reported</th><th>Analysis type</th><th>Repository</th>
             </tr>
           </thead>
           <tbody>
@@ -79,10 +84,10 @@ export default function Findings({ q }) {
                   <td>{st === 'Open'
                     ? <FilterSelect className="fsel small" aria-label="Transformation" value={fTrans(x)} options={TRANSFORMS} onChange={v => commit(S => { S.ftrans[x.key] = v; })} />
                     : <span className="mono small">{fTrans(x)}</span>}</td>
-                  <td>{fmtDate(x.at)}</td><td>{fmtTime(x.at)}</td><td>{typeName(x.type)}</td><td>{x.repo}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(x.at)}</td><td>{typeName(x.type)}</td><td>{x.repo}</td>
                 </tr>
               );
-            }) : <tr><td colSpan={9} className="empty" style={{ color: 'var(--text)' }}>{all.length ? 'No findings match the filters.' : 'No findings. Run an analysis to discover tech debt.'}</td></tr>}
+            }) : <tr><td colSpan={8} className="empty" style={{ color: 'var(--text)' }}>{all.length ? 'No findings match the filters.' : 'No findings. Run an analysis to discover tech debt.'}</td></tr>}
           </tbody>
         </table>
       </div>

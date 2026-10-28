@@ -187,3 +187,53 @@ export function Breadcrumbs({ items }) {
     </nav>
   );
 }
+
+// Select-like dropdown whose menu always opens below the field (native selects on macOS open centered over it).
+export function Dropdown({ value, onChange, options, ariaLabel, variant = '', style, id }) {
+  const opts = options.map(o => (Array.isArray(o) ? o : [o, o]));
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const ref = useRef(null);
+  const current = opts.find(([v]) => v === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = e => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+  useEffect(() => { if (open) ref.current?.querySelector('.dd-menu .hi')?.scrollIntoView({ block: 'nearest' }); }, [open, hi]);
+
+  const show = () => { setHi(Math.max(0, opts.findIndex(([v]) => v === value))); setOpen(true); };
+  const pick = v => { onChange(v); setOpen(false); ref.current?.querySelector('.dd-btn')?.focus(); };
+  function onKey(e) {
+    if (!open) {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); show(); }
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(opts.length - 1, h + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(0, h - 1)); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(opts[hi][0]); }
+    else if (e.key === 'Escape') { e.preventDefault(); setOpen(false); }
+    else if (e.key === 'Tab') setOpen(false);
+  }
+
+  return (
+    <div className={`dd ${variant}`} ref={ref} style={style}>
+      <button type="button" id={id} className="dd-btn" aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}
+        onClick={() => (open ? setOpen(false) : show())} onKeyDown={onKey}>
+        <span>{current ? current[1] : ''}</span><Icon n="down" s={14} />
+      </button>
+      {open && (
+        <ul className="dd-menu" role="listbox" aria-label={ariaLabel}>
+          {opts.map(([v, l], i) => (
+            <li key={v} role="option" aria-selected={v === value} className={`${i === hi ? 'hi' : ''} ${v === value ? 'sel' : ''}`}
+              onMouseEnter={() => setHi(i)} onMouseDown={e => { e.preventDefault(); pick(v); }}>
+              <span className="dd-check">{v === value ? '✓' : ''}</span>{l}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

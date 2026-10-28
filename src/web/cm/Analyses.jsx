@@ -34,7 +34,7 @@ export default function Analyses() {
               return (
                 <tr key={a.id}>
                   <td>{fmtDate(a.startedAt)}</td>
-                  <td><a href={`#/web/cm/analyses/${a.id}`}>{a.name}</a><div className="small muted">{typeName(a.type)}{a.scheduleId && ' · scheduled'}</div></td>
+                  <td><a href={`#/web/cm/analyses/${a.id}`}>{a.name}</a><div className="small muted">{typeName(a.type)}{a.scheduleId && ' · scheduled'}{a.runId && S.runs?.some(g => g.id === a.runId) && <> · part of <a href={`#/web/cm/runs/${a.runId}`}>{S.runs.find(g => g.id === a.runId).name}</a></>}</div></td>
                   <td><Status s={as} /></td>
                   <td style={{ minWidth: 200 }}>
                     <div>{done} of {plural(a.repos.length, 'repo')}</div>

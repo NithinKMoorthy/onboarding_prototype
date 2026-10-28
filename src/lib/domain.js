@@ -1,4 +1,4 @@
-import { db, getVersion } from './store';
+import { db, getVersion, nid } from './store';
 import { hash, rng, pick } from './format';
 
 export const ACCOUNT = '780601577939';
@@ -6,6 +6,7 @@ export const REGION = 'us-east-1';
 export const USER_ARN = `arn:aws:sts::${ACCOUNT}:assumed-role/Admin/nkmoorth-Isengard`;
 
 const now = () => Date.now();
+export const DAY = 86400000;
 
 /* ---------- catalog ---------- */
 export const TYPES = [
@@ -121,6 +122,7 @@ export function estate(repoNames) {
     repos: P.length, deps: P.reduce((n, p) => n + p.deps, 0), eos, eosPct: P.length ? Math.round(eos / P.length * 100) : 0,
     shared: shared.length, sharedEos: shared.filter(p => p.eos).length,
     java8: count(p => p.runtime === 'Java 8'), spring27: count(p => p.spring27),
+    upgrade: count(p => p.runtime === 'Java 8' || p.runtime === 'Node.js 14' || p.spring27),
     exposures, langs,
   };
 }
@@ -150,6 +152,12 @@ const T = {
   policyOwners: () => ({ title: 'Policy: CODEOWNERS file missing', sev: 'Low', fix: 'Automated', trans: 'AWS/docs-generation', file: 'CODEOWNERS', desc: 'Every repository must declare code owners.', rec: 'Add a CODEOWNERS file.' }),
   policyLic: L => ({ title: 'Policy: dependency with unapproved license (GPL-3.0)', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: L.file, desc: 'A dependency uses a license that is not on the approved list.', rec: 'Replace the dependency or request a license exception.' }),
 };
+const CAT = {
+  dep: 'Dependencies', runtime: 'Dependencies', api: 'Code quality', dup: 'Code quality', sync: 'Performance', config: 'Infrastructure', tests: 'Code quality',
+  cve: 'Vulnerabilities', secret: 'Secrets', tls: 'Configuration', cors: 'Configuration',
+  openapi: 'API design', auth: 'Authentication', docs: 'Documentation', errors: 'API design',
+  docker: 'Containers', serverless: 'Serverless', platform: 'Platform', policyLog: 'Policy', policyOwners: 'Policy', policyLic: 'Policy',
+};
 const BY_TYPE = { quick: ['dep', 'dep', 'dep', 'runtime'], comprehensive: ['dep', 'dep', 'runtime', 'api', 'dup', 'sync', 'config', 'tests'], security: ['cve', 'cve', 'secret', 'tls', 'cors'], agentic: ['openapi', 'auth', 'docs', 'errors'], modernization: ['docker', 'serverless', 'platform', 'runtime'], custom: ['policyLog', 'policyOwners', 'policyLic'] };
 const COUNT = { quick: [1, 3], comprehensive: [2, 6], security: [0, 3], agentic: [1, 3], modernization: [1, 3], custom: [0, 2] };
 
@@ -170,17 +178,18 @@ function quickFindings(repo) {
 }
 
 function genFindings(a, repo, at) {
-  if (a.type === 'quick') return quickFindings(repo).map(f => ({ ...f, key: `${repo}|${f.title}`, repo, aId: a.id, type: a.type, at, line: 1 }));
+  if (a.type === 'quick') return quickFindings(repo).map(f => ({ ...f, cat: 'Dependencies', key: `${repo}|${f.title}`, repo, aId: a.id, type: a.type, at, line: 1 }));
   const r = rng(a.type + '|' + repo);
   const L = LANG[langOf(repo)];
   const [mn, mx] = COUNT[a.type];
   const n = mn + Math.floor(r() * (mx - mn + 1));
   const out = [], seen = new Set();
   for (let g = 0; out.length < n && g < 30; g++) {
-    const f = T[pick(r, BY_TYPE[a.type])](L, r, repo);
+    const k = pick(r, BY_TYPE[a.type]);
+    const f = T[k](L, r, repo);
     if (!f || seen.has(f.title)) continue;
     seen.add(f.title);
-    out.push({ ...f, key: `${repo}|${f.title}`, repo, aId: a.id, type: a.type, at, line: 10 + Math.floor(r() * 300) });
+    out.push({ ...f, cat: CAT[k], key: `${repo}|${f.title}`, repo, aId: a.id, type: a.type, at, line: 10 + Math.floor(r() * 300) });
   }
   return out;
 }
@@ -277,18 +286,110 @@ export function isBusy() {
 
 export const srcName = id => (db().sources.find(s => s.id === id) || {}).name || '(removed)';
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-export function nextWeekday(day, time) {
+export function nextWeekday(day, time, from = now()) {
   const [h, m] = time.split(':').map(Number);
-  const d = new Date();
+  const d = new Date(from);
   d.setHours(h, m, 0, 0);
   const diff = (DAYS.indexOf(day) - d.getDay() + 7) % 7;
-  d.setDate(d.getDate() + (diff === 0 && d.getTime() <= now() ? 7 : diff));
+  d.setDate(d.getDate() + (diff === 0 && d.getTime() <= from ? 7 : diff));
   return d.getTime();
 }
 
+// Weekly runs fall on `day` every week, monthly runs on the first `day` of each month.
+export function nextOccurrence(freq, day, time, from = now()) {
+  const [h, m] = time.split(':').map(Number);
+  if (freq === 'Daily') { const d = new Date(from); d.setHours(h, m, 0, 0); if (d.getTime() <= from) d.setDate(d.getDate() + 1); return d.getTime(); }
+  if (freq === 'Weekly') return nextWeekday(day, time, from);
+  const f = new Date(from);
+  for (let k = 0; ; k++) {
+    const d = new Date(f.getFullYear(), f.getMonth() + k, 1, h, m);
+    d.setDate(1 + (DAYS.indexOf(day) - d.getDay() + 7) % 7);
+    if (d.getTime() > from) return d.getTime();
+  }
+}
+
 export function nextRun(x) {
+  if (x.day) return nextOccurrence(x.frequency, x.day, x.time);
   const d = new Date(x.startAt || x.createdAt);
   const step = { Daily: 1, Weekly: 7, Monthly: 30 }[x.frequency];
   while (d.getTime() <= now()) d.setDate(d.getDate() + step);
   return d.getTime();
+}
+export const fmtNext = t => new Date(t).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+// First-run landing: nothing beyond the Get started estate scan has run yet.
+export const showLanding = S => !S.analyses.length || (!!S.onboarding && S.analyses.every(a => a.id === S.onboarding.scanId));
+
+/* ---------- recommendations ---------- */
+// The recommended plan for an existing source, in display order.
+export const PLAN = ['security', 'comprehensive', 'modernization'];
+
+// "Security weekly and the others monthly", from [name, frequency] pairs.
+export function scheduleSummary(pairs) {
+  const by = {};
+  pairs.forEach(([n, f]) => { (by[f] = by[f] || []).push(n); });
+  const groups = Object.entries(by).sort((a, b) => a[1].length - b[1].length);
+  if (groups.length === 1) return pairs.length === 1 ? `${pairs[0][0]} ${groups[0][0].toLowerCase()}` : `all ${groups[0][0].toLowerCase()}`;
+  if (groups.length === 2 && groups[0][1].length < groups[1][1].length) return `${groups[0][1].join(', ')} ${groups[0][0].toLowerCase()}, the others ${groups[1][0].toLowerCase()}`;
+  return groups.map(([f, ns]) => `${ns.join(', ')} ${f.toLowerCase()}`).join('; ');
+}
+export const EVERY = { Daily: 'every day', Weekly: 'every week', Monthly: 'every month' };
+
+/* ---------- runs: analyses started together, with their schedules ---------- */
+export function uniqueRunName(S, base) {
+  const taken = n => (S.runs || []).some(g => g.name === n) || S.schedules.some(x => x.name.startsWith(`${n}-`));
+  let name = base.slice(0, 60), i = 2;
+  while (taken(name)) name = `${base.slice(0, 60)}-${i++}`;
+  return name;
+}
+
+// Only call inside commit(). o: { name, src, types, def, repos, freqs, watch, rescan, includeNew, day, time, infra, role, roleCreated, email, slack, contexts, sharedContext }
+export function startRun(S, o) {
+  const managed = !o.infra || o.infra === 'managed';
+  const ctx = t => [o.sharedContext, (o.contexts || {})[t]].map(x => (x || '').trim()).filter(Boolean).join('\n\n');
+  const list = o.types.map(t => {
+    const a = createAnalysis(S, nid('an'), { name: `${o.name} · ${typeName(t)}`, type: t, def: o.def, selected: o.repos, infra: managed ? 'managed' : 'customer', stack: o.infra }, o.src, null);
+    if (ctx(t)) a.context = ctx(t);
+    return a;
+  });
+  const scheduleIds = [];
+  if (o.watch) {
+    // Analyses set to run 'Once' run now but get no schedule.
+    [...(o.rescan ? ['quick'] : []), ...o.types.filter(t => o.freqs[t] !== 'Once')].forEach(t => {
+      const sch = {
+        id: nid('sch'), name: `${o.name}-${t}`, infra: managed ? 'AWS managed' : o.infra, frequency: t === 'quick' ? 'Weekly' : o.freqs[t], type: t, sourceId: o.src.id,
+        repos: [...o.repos], role: o.role || '', roleCreated: !!o.roleCreated, createdAt: now(), day: o.day, time: o.time, tz: 'PT', includeNew: o.includeNew,
+        notify: { email: o.email || '', slack: o.slack || '' }, context: ctx(t),
+      };
+      S.schedules.push(sch);
+      scheduleIds.push(sch.id);
+      const a = list.find(x => x.type === t);
+      if (a) a.scheduleId = sch.id;
+    });
+  }
+  const firstRun = scheduleIds.length ? Math.min(...scheduleIds.map(id => nextRun(S.schedules.find(x => x.id === id)))) : null;
+  const g = { id: nid('run'), name: o.name, sourceId: o.src.id, analysisIds: list.map(a => a.id), scheduleIds, email: o.watch ? o.email || '' : '', slack: o.watch ? o.slack || '' : '', day: o.day, time: o.time, firstRun, createdAt: now() };
+  S.runs = [...(S.runs || []), g];
+  list.forEach(a => { a.runId = g.id; });
+  return g;
+}
+
+/* ---------- returning users: how stale the last results are ---------- */
+// Null unless the newest analysis is a one-off more than two weeks old.
+export function staleness(S = db()) {
+  if (S.schedules.length) return null;
+  const list = S.analyses.filter(a => a.type !== 'quick');
+  if (!list.length) return null;
+  const last = list.reduce((x, y) => (y.startedAt > x.startedAt ? y : x));
+  if (aStatus(last) !== 'Completed' || now() - last.startedAt < 14 * DAY) return null;
+  const src = S.sources.find(s => s.id === last.sourceId);
+  if (!src) return null;
+  const r = rng('stale|' + last.id);
+  const changed = last.repos.filter((_, i) => i > 0 || r() < 0.3);
+  return {
+    a: last, src, since: last.startedAt, age: now() - last.startedAt,
+    changed: changed.length, commits: changed.reduce(n => n + 14 + Math.floor(r() * 30), 0),
+    eol: last.repos.filter(n => langOf(n) === 'Python'),
+    newRepos: src.repos.filter(x => x.addedAt && x.addedAt > last.startedAt),
+  };
 }

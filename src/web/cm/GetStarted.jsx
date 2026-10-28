@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { commit, nid, openModal, useStore } from '../../lib/store';
+import { commit, nid, useStore } from '../../lib/store';
 import { go } from '../../lib/router';
-import { ANALYSIS_META, CUSTOM_DEFS, PROVIDERS, aDone, aStatus, createAnalysis, estate, nextWeekday, providerHost, typeName } from '../../lib/domain';
-import { fmtTime, focusFirstError, plural } from '../../lib/format';
-import { Alert, Breadcrumbs, Choice, ErrorText, Field, Icon, Select, Spinner, Status, TextInput } from '../../components/ui';
+import { ANALYSIS_META, CUSTOM_DEFS, PLAN, PROVIDERS, aDone, stackStatus, aStatus, repoStates, createAnalysis, estate, providerHost, startRun, typeName } from '../../lib/domain';
+import { focusFirstError, plural } from '../../lib/format';
+import { Alert, Breadcrumbs, Choice, ErrorText, Field, Icon, Select, Spinner, Status, TextInput, Tile } from '../../components/ui';
 import { createSource, validateSource } from './ConnectSource';
+import { ORDER, ReviewBox, ScheduleTable, isRecurring, whyFromScan } from './ScheduleTable';
 
-/* First-run flow: connect a source → quick scan → recommended analyses → schedule. */
+/* First-run flow: connect a source → quick scan → recommended analyses on a schedule. */
 
-const STEPS = ['Connect source', 'Review your estate', 'Choose analysis', 'Schedule and run'];
-const RECOMMENDED = ['comprehensive', 'modernization', 'agentic'];
-const OTHER = ['security', 'custom'];
+const ROLES = ['AWSTransformExecutionRole', 'ATX-ContinuousModernization-Role', 'platform-eng-transform-role', 'security-scanning-role'];
+const RUN_STACK = 'AtxInfrastructureStack';
+
+const STEPS = ['Connect source', 'Review your estate', 'Schedule and run'];
 
 export default function GetStarted() {
   const S = useStore();
@@ -18,7 +20,7 @@ export default function GetStarted() {
   const src = S.sources.find(s => s.id === ob.sourceId);
   const scan = S.analyses.find(a => a.id === ob.scanId);
   const [step, setStep] = useState(src && scan ? 2 : 1);
-  const [picked, setPicked] = useState(RECOMMENDED);
+  const [picked, setPicked] = useState(PLAN);
   const [def, setDef] = useState(CUSTOM_DEFS[0]);
   const goStep = n => { setStep(n); window.scrollTo(0, 0); };
   const reached = Math.max(step, src && scan ? 2 : 1);
@@ -26,8 +28,7 @@ export default function GetStarted() {
   let body;
   if (step === 1 || !src || !scan) body = <ConnectStep src={src} onDone={() => goStep(2)} />;
   else if (step === 2) body = <EstateStep src={src} scan={scan} onPrev={() => goStep(1)} onNext={() => goStep(3)} />;
-  else if (step === 3) body = <ChooseStep scan={scan} picked={picked} setPicked={setPicked} def={def} setDef={setDef} onPrev={() => goStep(2)} onNext={() => goStep(4)} />;
-  else body = <ScheduleStep src={src} scan={scan} picked={picked} def={def} onPrev={() => goStep(3)} />;
+  else body = <ScheduleStep src={src} scan={scan} picked={picked} setPicked={setPicked} def={def} setDef={setDef} onPrev={() => goStep(2)} />;
 
   return (
     <>
@@ -56,7 +57,8 @@ const Head = ({ title, children }) => <div className="gs-head"><h1>{title}</h1>{
 
 /* ---------- step 1 ---------- */
 function ConnectStep({ src, onDone }) {
-  const [c, setC] = useState({ provider: 'github', org: '', token: '', url: '', includePublic: false, name: '' });
+  const [c, setC] = useState({ provider: 'github', org: '', token: '', url: '', includePublic: false, name: '', infra: 'managed', roleMode: 'create', role: '' });
+  const [runsOpen, setRunsOpen] = useState(false);
   const [nameTouched, setNameTouched] = useState(false);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
@@ -71,15 +73,19 @@ function ConnectStep({ src, onDone }) {
     setErrors(e => (e[k] ? { ...e, [k]: undefined } : e));
   };
 
+  const stackSt = stackStatus(RUN_STACK);
   function connect() {
     const e = validateSource(c);
+    if (c.infra === 'managed' && c.roleMode === 'existing' && !c.role) e.role = 'Choose a role, or let AWS Transform create one.';
+    if (c.infra === 'customer' && stackSt !== 'Deployed') e.stack = stackSt === 'Not deployed' ? 'Deploy the stack first, or run on AWS managed.' : 'Wait for the stack to finish deploying.';
     setErrors(e);
-    if (Object.keys(e).length) { focusFirstError(); return; }
+    if (e.role || e.stack) setRunsOpen(true);
+    if (Object.keys(e).length) { setTimeout(focusFirstError); return; }
     setBusy(true);
     setTimeout(() => {
       const s = createSource(c);
       commit(S => {
-        const a = createAnalysis(S, nid('an'), { name: `${s.name} quick scan`, type: 'quick', selected: s.repos.map(r => r.name), infra: 'managed' }, s, null);
+        const a = createAnalysis(S, nid('an'), { name: `${s.name} quick scan`, type: 'quick', selected: s.repos.map(r => r.name), infra: c.infra, stack: RUN_STACK }, s, null);
         a.fast = true;
         S.onboarding = { sourceId: s.id, scanId: a.id };
       });
@@ -92,7 +98,7 @@ function ConnectStep({ src, onDone }) {
       <h2 className="c-header">How getting started works</h2>
       <div className="gs-how">
         {[['Connect', 'One organization to start. You can add more sources later.'],
-          ['Run a quick scan', 'Tech debt (quick) reads package manifests for outdated dependencies and stale versions. Results in minutes.'],
+          ['We scan your estate', "A quick read of your package manifests to see what you're running. Takes minutes."],
           ['Get a recommended plan', 'Which analyses to run next, which repositories to start with, and a recurring schedule.']].map(([t, d], i) => (
           <div key={t} className="row" style={{ alignItems: 'flex-start' }}>
             <span className={`n ${i === 0 ? 'cur' : ''}`}>{i + 1}</span>
@@ -106,7 +112,7 @@ function ConnectStep({ src, onDone }) {
   if (src) {
     return (
       <div className="stack">
-        <Head title="Connect your source code">AWS Transform starts with a quick scan to show what's in your estate, then recommends where to go deeper. Nothing in your repositories is changed.</Head>
+        <Head title="Connect your source code">AWS Transform starts with a quick scan of your estate, then recommends which analyses to run. Nothing in your repositories is changed.</Head>
         {how}
         <Alert type="success">Connected to <b>{providerHost(src)}/{src.org}</b> as source <b>{src.name}</b>. {plural(src.repos.length, src.includePublic ? 'repository' : 'private repository', src.includePublic ? 'repositories' : 'private repositories')}.</Alert>
         <div className="wiz-actions">
@@ -119,7 +125,7 @@ function ConnectStep({ src, onDone }) {
 
   return (
     <div className="stack">
-      <Head title="Connect your source code">AWS Transform starts with a quick scan to show what's in your estate, then recommends where to go deeper. Nothing in your repositories is changed.</Head>
+      <Head title="Connect your source code">AWS Transform starts with a quick scan of your estate, then recommends which analyses to run. Nothing in your repositories is changed.</Head>
       {how}
       <div className="container">
         <h2>Provider</h2>
@@ -163,11 +169,62 @@ function ConnectStep({ src, onDone }) {
           <TextInput id="gs-name" invalid={errors.name} placeholder="acme-platform-github" value={c.name} onChange={v => { setNameTouched(true); set('name')(v); }} />
         </Field>
       </div>
+      <WhereItRuns c={c} set={set} open={runsOpen} setOpen={setRunsOpen} errors={errors} stackSt={stackSt} />
       <div className="wiz-actions">
-        <span className="note">Next: a quick tech debt scan of your package manifests.</span>
+        <span className="note">Next: a quick scan of your estate, so we can recommend analyses.</span>
         <button className="btn link" onClick={cancel}>Cancel</button>
-        <button className="btn primary" onClick={connect} disabled={busy}>{busy ? <><Spinner /> Connecting…</> : 'Connect and run quick scan'}</button>
+        <button className="btn primary" onClick={connect} disabled={busy}>{busy ? <><Spinner /> Connecting…</> : 'Connect and scan'}</button>
       </div>
+    </div>
+  );
+}
+
+// Collapsed by default to a one-line summary; most people keep AWS managed.
+function WhereItRuns({ c, set, open, setOpen, errors, stackSt }) {
+  const managed = c.infra === 'managed';
+  const summary = !managed ? 'Customer owned, on a stack in your account'
+    : c.roleMode === 'existing' ? `AWS managed, with ${c.role || 'your existing role'}`
+    : open ? 'AWS managed. Nothing to deploy.' : 'AWS managed. Nothing to deploy; we create the execution role.';
+  const head = (
+    <div className="spread">
+      <span><b>Where it runs</b> <span className="muted">· {summary}</span></span>
+      <button className="btn link" onClick={() => setOpen(!open)}>{open ? 'Done' : 'Change'}</button>
+    </div>
+  );
+  if (!open) return <div className="container runs-box">{head}</div>;
+  const deployed = stackSt === 'Deployed';
+  return (
+    <div className="container runs-box">
+      {head}
+      <div className="prov-tiles two" role="radiogroup" aria-label="Where it runs" style={{ marginTop: 16 }}>
+        <Tile name="gs-infra" checked={managed} onChange={() => set('infra')('managed')} title="AWS managed" desc="Runs on infrastructure AWS Transform manages. Nothing to deploy." />
+        <Tile name="gs-infra" checked={!managed} onChange={() => set('infra')('customer')} title="Customer owned" desc="Runs on a stack in your own AWS account, so code never leaves it." />
+      </div>
+      {managed ? (
+        <div className="runs-role">
+          <b>Execution role</b>
+          <div>
+            <div className="row" style={{ gap: 20 }} role="radiogroup" aria-label="Execution role">
+              <Choice name="gs-role" checked={c.roleMode === 'create'} onChange={() => set('roleMode')('create')} label="Create one for me" />
+              <Choice name="gs-role" checked={c.roleMode === 'existing'} onChange={() => set('roleMode')('existing')} label="Use an existing role" />
+            </div>
+            {c.roleMode === 'create'
+              ? <div className="small muted" style={{ marginTop: 6 }}>AWS Transform creates a role that trusts it, with only the permissions these runs need.</div>
+              : <Field id="gs-role" error={errors.role} hint="Roles in this account that AWS Transform can assume." style={{ marginTop: 10 }}>
+                  <Select id="gs-role" value={c.role} invalid={errors.role} placeholder="Choose a role" options={ROLES} style={{ maxWidth: 420 }} onChange={set('role')} />
+                </Field>}
+          </div>
+        </div>
+      ) : (
+        <div className="runs-stack" id="gs-stack">
+          <div><b>Stack in this account</b> <Status s={stackSt} /></div>
+          <p style={{ margin: '6px 0' }}>{deployed
+            ? <><span className="mono">{RUN_STACK}</span> is ready. This scan and every scheduled run use it.</>
+            : 'Deploy it once with CloudFormation. This scan and every scheduled run use it, and you choose when runs start. Takes about 10 minutes.'}</p>
+          {stackSt === 'Not deployed' && <a href="#" style={{ fontWeight: 700 }} onClick={e => { e.preventDefault(); commit(S => { S.infra[RUN_STACK] = { startedAt: Date.now(), version: '1.4.2', op: 'deploy' }; }); }}>Deploy stack in CloudFormation <Icon n="ext" s={14} /></a>}
+          <ErrorText msg={errors.stack} />
+        </div>
+      )}
     </div>
   );
 }
@@ -181,35 +238,32 @@ function EstateStep({ src, scan, onPrev, onNext }) {
     <div className="wiz-actions">
       <button className="btn link" onClick={cancel}>Cancel</button>
       <button className="btn" onClick={onPrev}>Previous</button>
-      <button className="btn primary" onClick={onNext} disabled={st !== 'Completed'}>See recommendations</button>
+      <button className="btn primary" onClick={onNext} disabled={st !== 'Completed'}>Set up continuous analysis</button>
     </div>
   );
 
-  if (st !== 'Completed') {
-    const pct = Math.round(done / n * 100);
-    return (
-      <div className="stack">
-        <Head title={`Scanning ${src.org}`}>A quick scan of your package manifests. We'll use this to recommend which analyses to run.</Head>
-        <Alert type="info" title={`Reading package manifests in ${n} ${scope}…`}>
-          <div className="row" style={{ gap: 16, marginTop: 8 }}><div className="progress grow"><span style={{ width: `${pct}%` }} /></div><span className="small">{done} of {n}</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}>This usually takes under a minute. You can leave this page; the scan keeps running.</div>
-        </Alert>
-        {actions}
-      </div>
-    );
-  }
-
-  const e = estate(scan.repos);
-  const maxLang = Math.max(...e.langs.map(l => l.count));
+  const scanning = st !== 'Completed';
+  const states = repoStates(scan);
+  const e = estate(scan.repos.filter((_, i) => states[i] === 'Completed'));
+  const maxLang = Math.max(1, ...e.langs.map(l => l.count));
   return (
     <div className="stack">
-      <Head title={`Here's what's in ${src.org}`}>From a quick scan of your package manifests. We'll use this to recommend which analyses to run.</Head>
-      <Alert type="success">Connected to <b>{providerHost(src)}/{src.org}</b>. Scanned {n} {scope}.</Alert>
+      {scanning ? <>
+        <Head title={`Scanning ${src.org}`}>A quick scan of your package manifests. Results fill in below as each repository is read. We'll use them to recommend which analyses to run.</Head>
+        <Alert type="info" title={`Reading package manifests in ${n} ${scope}…`}>
+          <div className="row" style={{ gap: 16, marginTop: 8 }}><div className="progress grow"><span style={{ width: `${Math.round(done / n * 100)}%` }} /></div><span className="small">{done} of {n}</span></div>
+          <div className="small muted" style={{ marginTop: 6 }}>This usually takes under a minute. You can leave this page; the scan keeps running.</div>
+        </Alert>
+      </> : <>
+        <Head title={`Here's what's in ${src.org}`}>From a quick scan of your package manifests. We'll use this to recommend which analyses to run.</Head>
+        <Alert type="success">Connected to <b>{providerHost(src)}/{src.org}</b>. Scanned {n} {scope}.</Alert>
+        <Alert type="info">This scan only reads manifests. Next, we'll set up the analyses that go deeper, based on what we found here, and keep them running on a schedule.</Alert>
+      </>}
 
       <div className="container">
-        <h2 className="c-header">Estate at a glance</h2>
+        <h2 className="c-header">Estate at a glance{scanning && <span className="counter"> (so far, {done} of {n} repositories)</span>}</h2>
         <div className="stat-row">
-          <div className="stat"><div className="k">Repositories</div><div className="v">{e.repos}</div></div>
+          <div className="stat"><div className="k">Repositories scanned</div><div className="v">{e.repos}</div></div>
           <div className="stat"><div className="k">Outdated dependencies</div><div className="v">{e.deps}</div></div>
           <div className="stat"><div className="k">On end-of-support runtimes</div><div className="v bad">{e.eos}</div><div className="small muted">{e.eosPct}% of repositories</div></div>
           <div className="stat"><div className="k">Shared libraries</div><div className="v">{e.shared}</div><div className="small muted">Used by other repositories here</div></div>
@@ -228,13 +282,14 @@ function EstateStep({ src, scan, onPrev, onNext }) {
                 <td><Status cls="err" icon="err">End of support</Status></td>
                 <td>{x.shared ? `${x.shared} of ${e.shared}` : 'None'}</td>
               </tr>
-            )) : <tr><td colSpan={5} className="empty">No end-of-support runtimes, frameworks or libraries found.</td></tr>}
+            )) : <tr><td colSpan={5} className="empty">{scanning ? 'None found yet.' : 'No end-of-support runtimes, frameworks or libraries found.'}</td></tr>}
           </tbody>
         </table>
       </div>
 
       <div className="container">
         <h2 className="c-header">By language</h2>
+        {!e.langs.length && <p className="muted">Languages appear here as repositories are read.</p>}
         {e.langs.map(l => (
           <div key={l.lang} className="lang-row">
             <span>{l.label}</span>
@@ -244,217 +299,41 @@ function EstateStep({ src, scan, onPrev, onNext }) {
         ))}
       </div>
 
-      <Alert type="info">This scan only reads manifests. Next, we'll recommend the analyses that go deeper, based on what we found here.</Alert>
       {actions}
     </div>
   );
 }
 
 /* ---------- step 3 ---------- */
-function fromScan(type, e) {
-  if (type === 'comprehensive') return `${e.deps} outdated dependencies and ${e.eos} repositories on end-of-support runtimes${e.sharedEos ? `, including ${plural(e.sharedEos, 'shared library', 'shared libraries')} other repositories depend on` : ''}.`;
-  if (type === 'modernization') return e.java8 || e.spring27
-    ? `${e.java8} repositories on Java 8${e.spring27 ? ` and ${e.spring27} on Spring Boot 2.7` : ''} need a runtime or framework upgrade anyway.`
-    : `${e.eos} repositories need a runtime upgrade anyway.`;
-  return `${e.eos} repositories need remediation, and AWS Transform carries out remediations with agents.`;
-}
-
-function ChooseStep({ scan, picked, setPicked, def, setDef, onPrev, onNext }) {
-  const [error, setError] = useState('');
-  const e = estate(scan.repos);
-  const toggle = t => { setError(''); setPicked(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]); };
-  const next = () => { if (!picked.length) { setError('Choose at least one analysis.'); return; } onNext(); };
-
-  return (
-    <div className="stack">
-      <Head title="Choose what to analyze next">Your quick scan shows what's outdated. These three analyses show what remediating it involves, what to modernize toward while you're in the code, and how well agents can carry out the work.</Head>
-      <div className="container">
-        <div className="spread">
-          <h2>Recommended analyses</h2>
-          <a href="#" onClick={ev => { ev.preventDefault(); openModal('compareTypes'); }}><b>Compare all analysis types</b></a>
-        </div>
-        <p className="muted" style={{ margin: '4px 0 10px' }}>Each one is based on a specific result from your quick scan. Choose one or more.</p>
-        <div style={{ marginBottom: 14 }}><Status s="Completed"><b>Tech debt (quick)</b>&nbsp;completed in step 2</Status></div>
-        <ErrorText msg={error} />
-        {RECOMMENDED.map(t => (
-          <label key={t} className={`rec-card ${picked.includes(t) ? 'selected' : ''}`}>
-            <div className="row">
-              <input type="checkbox" checked={picked.includes(t)} onChange={() => toggle(t)} />
-              <h3>{typeName(t)}</h3><span className="badge green">Recommended</span>
-            </div>
-            <div className="rec-cols">
-              <div><div className="eyebrow">From your quick scan</div>{fromScan(t, e)}</div>
-              <div><div className="eyebrow">What you'll learn</div>{ANALYSIS_META[t].learn}</div>
-            </div>
-          </label>
-        ))}
-        <div className="expander" style={{ marginTop: 20 }}>
-          <b>Other analysis types</b>
-          <div style={{ marginTop: 10 }}>
-            {OTHER.map(t => (
-              <Choice key={t} type="checkbox" checked={picked.includes(t)} onChange={() => toggle(t)} label={typeName(t)}
-                desc={t === 'security' ? 'Detects CVEs, exposed secrets and insecure configurations in your code and dependencies, using the AWS Security Agent.' : 'Run a transformation definition your platform team maintains, including your own policies.'}>
-                {t === 'custom' && (
-                  <Field id="gs-def" label="Transformation definition" style={{ marginTop: 8 }}>
-                    <Select id="gs-def" value={def} onChange={setDef} options={CUSTOM_DEFS} />
-                  </Field>
-                )}
-              </Choice>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="wiz-actions">
-        <button className="btn link" onClick={cancel}>Cancel</button>
-        <button className="btn" onClick={onPrev}>Previous</button>
-        <button className="btn primary" onClick={next}>Next: Schedule and run</button>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- step 4 ---------- */
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const TIMES = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`);
-const ORDER = ['quick', 'comprehensive', 'modernization', 'agentic', 'security', 'custom'];
-
-function ScheduleStep({ src, scan, picked, def, onPrev }) {
+function ScheduleStep({ src, scan, picked, setPicked, def, setDef, onPrev }) {
   const types = ORDER.filter(t => picked.includes(t));
-  const [mode, setMode] = useState('watch');
-  const [freqs, setFreqs] = useState(() => Object.fromEntries(['quick', ...types].map(t => [t, ANALYSIS_META[t].freq])));
+  const [freqs, setFreqs] = useState(() => Object.fromEntries(ORDER.map(t => [t, ANALYSIS_META[t].freq])));
   const [day, setDay] = useState('Monday');
   const [time, setTime] = useState('06:00');
-  const [includeNew, setIncludeNew] = useState(true);
-  const [email, setEmail] = useState('');
-  const [slack, setSlack] = useState('');
-  const [name, setName] = useState(`${src.name}-baseline`.slice(0, 64));
-  const [editName, setEditName] = useState(false);
-  const [errors, setErrors] = useState({});
-  const watch = mode === 'watch';
-  const n = src.repos.length;
-  const firstRun = nextWeekday(day, time);
-  const firstRunLabel = new Date(firstRun).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-  // Matches the simulation: repos start 2.5s apart and take up to 14s each.
-  const etaMin = Math.max(1, Math.ceil(((n - 1) * 2.5 + 14) / 60));
-
-  const groups = {};
-  ['quick', ...types].forEach(t => { (groups[freqs[t]] = groups[freqs[t]] || []).push(ANALYSIS_META[t].short); });
-  const scheduleText = watch
-    ? `Now, then ${Object.entries(groups).map(([f, names]) => `${names.join(', ')} ${f.toLowerCase()}`).join('; ')}, ${day}s ${time} PT`
-    : 'Now, once';
+  const e = estate(scan.repos);
+  const name = `${src.name}-baseline`.slice(0, 64);
 
   function run() {
-    const e = {};
-    if (!/^[A-Za-z0-9-]{1,64}$/.test(name)) { e.name = 'Use 1–64 letters, numbers and hyphens.'; setEditName(true); }
-    if (watch) {
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) e.email = 'Enter an email address for the digest.';
-      if (slack && !/^#[a-z0-9_-]{1,80}$/.test(slack.trim())) e.slack = 'Use a channel name like #modernization.';
-    }
-    setErrors(e);
-    if (Object.keys(e).length) { focusFirstError(); return; }
-
-    const started = commit(S => {
-      const list = types.map(t => {
-        const a = createAnalysis(S, nid('an'), { name: `${name} · ${typeName(t)}`, type: t, def: t === 'custom' ? def : null, selected: src.repos.map(r => r.name), infra: 'managed' }, src, null);
-        return a;
-      });
-      if (watch) {
-        ['quick', ...types].forEach(t => {
-          const sch = { id: nid('sch'), name: `${name}-${t}`, infra: 'AWS managed', frequency: freqs[t], type: t, sourceId: src.id, repos: src.repos.map(r => r.name), role: '', createdAt: Date.now(), startAt: firstRun, tz: 'PT', includeNew, notify: { email: email.trim(), slack: slack.trim() } };
-          S.schedules.push(sch);
-          const a = list.find(x => x.type === t);
-          if (a) a.scheduleId = sch.id;
-        });
-      }
+    const groupId = commit(S => {
+      const g = startRun(S, { name, src, types, def, repos: src.repos.map(r => r.name), freqs, watch: true, rescan: false, includeNew: true, day, time, infra: 'managed' });
       S.onboarding = null;
-      return list;
+      return g.id;
     });
-    go('#/web/cm/dashboard', { type: 'success', text: `Started ${plural(started.length, 'analysis', 'analyses')} on ${plural(n, 'repository', 'repositories')}.${watch ? ` Recurring runs start ${firstRunLabel}, and the digest goes to ${email.trim()}.` : ''}` });
+    go(`#/web/cm/runs/${groupId}`);
   }
 
   return (
     <div className="stack">
-      <Head title="Schedule and run">Dependencies go stale and runtimes reach end of support all the time. Recurring analysis catches changes as they appear, so your findings stay current.</Head>
-
-      <div className="container">
-        <h2 className="c-header">How often to analyze</h2>
-        <div className="prov-tiles two">
-          <label className={`prov-tile ${watch ? 'selected' : ''}`}>
-            <input type="radio" name="gs-mode" checked={watch} onChange={() => setMode('watch')} />
-            <span><b style={{ fontSize: 16 }}>Analyze now, then keep watching</b><div style={{ margin: '4px 0' }}><span className="badge green">Recommended</span></div>
-              <div>Get results now, then recurring runs across {src.org}. You're notified only about what's new or changed.</div></span>
-          </label>
-          <label className={`prov-tile ${!watch ? 'selected' : ''}`}>
-            <input type="radio" name="gs-mode" checked={!watch} onChange={() => setMode('once')} />
-            <span><b style={{ fontSize: 16 }}>Run once</b><div style={{ marginTop: 4 }}>A one-time snapshot. You can turn on recurring analysis later from the analysis page.</div></span>
-          </label>
-        </div>
-
-        {watch && (
-          <>
-            <div style={{ marginTop: 20 }}><b>Recommended schedule</b><div className="small muted">Each analysis runs as often as what it checks tends to change.</div></div>
-            <table className="tbl sched-tbl" style={{ marginTop: 10 }}>
-              <thead><tr><th>Analysis</th><th>Frequency</th><th>Why</th></tr></thead>
-              <tbody>
-                {['quick', ...types].map(t => (
-                  <tr key={t}>
-                    <td><b>{typeName(t)}</b></td>
-                    <td><Select className="input" aria-label={`${typeName(t)} frequency`} value={freqs[t]} onChange={v => setFreqs(f => ({ ...f, [t]: v }))} options={['Daily', 'Weekly', 'Monthly']} /></td>
-                    <td className="muted">{ANALYSIS_META[t].why}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="row" style={{ gap: 16, marginTop: 16, alignItems: 'flex-start' }}>
-              <Field id="gs-day" label="Run on" style={{ flex: '0 0 230px' }}><Select id="gs-day" value={day} onChange={setDay} options={DAYS} /></Field>
-              <Field id="gs-time" label="At" style={{ flex: '0 0 230px', marginTop: 0 }}><Select id="gs-time" value={time} onChange={setTime} options={TIMES.map(t => [t, `${t} PT`])} /></Field>
-            </div>
-            <div className="field" style={{ marginTop: 16 }}>
-              <Choice type="checkbox" checked={includeNew} onChange={setIncludeNew} label={`Include new repositories added to ${src.org}`} desc="New repositories are picked up by the next run." />
-            </div>
-          </>
-        )}
-      </div>
-
-      {watch && (
-        <div className="container">
-          <h2>Where to send updates</h2>
-          <p className="muted" style={{ margin: '4px 0 0' }}>A digest after each run with only the findings that are new or changed since the last one.</p>
-          <div className="split" style={{ maxWidth: 720, marginTop: 16, alignItems: 'start' }}>
-            <Field id="gs-email" label="Email" error={errors.email}><TextInput id="gs-email" type="email" invalid={errors.email} placeholder="platform-team@example.com" value={email} onChange={v => { setEmail(v); setErrors(x => ({ ...x, email: undefined })); }} /></Field>
-            <Field id="gs-slack" label="Slack channel" optional error={errors.slack} style={{ marginTop: 0 }}><TextInput id="gs-slack" invalid={errors.slack} placeholder="#modernization" value={slack} onChange={v => { setSlack(v); setErrors(x => ({ ...x, slack: undefined })); }} /></Field>
-          </div>
-        </div>
-      )}
-
-      <div className="container">
-        <h2 className="c-header">Review</h2>
-        <div className="review-grid">
-          <div><div className="k">Source</div>{src.org} ({PROVIDERS[src.provider].name})</div>
-          <div><div className="k">Analyses</div>{types.map(typeName).join(', ')}</div>
-          <div><div className="k">Repositories</div>{n}{watch && includeNew && <span className="muted">, plus new ones as they're added</span>}</div>
-          <div><div className="k">Schedule</div>{scheduleText}</div>
-          <div>
-            <div className="k">Name</div>
-            {editName
-              ? <><TextInput id="gs-aname" invalid={errors.name} value={name} onChange={v => { setName(v); setErrors(x => ({ ...x, name: undefined })); }} /><ErrorText msg={errors.name} /></>
-              : <>{name} <button className="btn link small" onClick={() => setEditName(true)}>Edit</button></>}
-          </div>
-          <div><div className="k">First results</div>In about {plural(etaMin, 'minute')} (around {fmtTime(Date.now() + etaMin * 60000)})</div>
-        </div>
-        <hr style={{ border: 0, borderTop: '1px solid var(--border-light)', margin: '16px 0' }} />
-        <b>What you'll get</b>
-        <ul style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: '24px' }}>
-          {types.map(t => <li key={t}>{ANALYSIS_META[t].get}</li>)}
-          {watch && <li>A digest of new and changed findings after each run, starting {firstRunLabel}</li>}
-        </ul>
-        <p className="small muted" style={{ marginTop: 12 }}>Quick scan findings from step 2 ({plural(scan.repos.length, 'repository', 'repositories')}) are already on the Findings tab.</p>
-      </div>
-
+      <Head title="Schedule and run">Here's how we'll keep {src.org} current, based on your scan. Each analysis starts today and repeats on the schedule below. Change anything you need to.</Head>
+      <ScheduleTable org={src.org} types={types} freqs={freqs} setFreq={(t, v) => setFreqs(f => ({ ...f, [t]: v }))}
+        intro="Your code, its dependencies and the threats against them change every week. These analyses re-run on their own, so your findings always match your estate today, not the day you first scanned it. You'll only hear about what's new or changed."
+        onAdd={t => setPicked(p => [...p, t])} onRemove={t => setPicked(p => p.filter(x => x !== t))} why={(t, f) => whyFromScan(t, e, f)}
+        def={def} setDef={setDef} day={day} setDay={setDay} time={time} setTime={setTime} />
+      <ReviewBox src={src} types={types} freqs={freqs} day={day} time={time} repos={src.repos.length} />
       <div className="wiz-actions">
         <button className="btn link" onClick={cancel}>Cancel</button>
         <button className="btn" onClick={onPrev}>Previous</button>
-        <button className="btn primary" onClick={run}>{watch ? 'Run and keep watching' : `Run ${plural(types.length, 'analysis', 'analyses')}`}</button>
+        <button className="btn primary" onClick={run} disabled={!types.length}>{isRecurring(types, freqs) || !types.length ? 'Begin continuous analysis' : `Run ${types.length === 1 ? 'analysis' : 'analyses'} once`}</button>
       </div>
     </div>
   );

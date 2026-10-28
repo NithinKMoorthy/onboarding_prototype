@@ -3,6 +3,7 @@ import { go } from '../../lib/router';
 import { aDone, aStatus, allFindings, isActive, repoStatus, typeName } from '../../lib/domain';
 import { fmtDT, plural } from '../../lib/format';
 import { Alert, usePager } from '../../components/ui';
+import { RerunNotice, StaleBanner } from './StaleBanner';
 
 const SEVS = ['High', 'Medium', 'Low'];
 const openRepo = repo => go(`#/web/cm/findings?repo=${encodeURIComponent(repo)}`);
@@ -27,6 +28,8 @@ export default function Dashboard() {
 
   return (
     <>
+      <StaleBanner />
+      <RerunNotice />
       <div className="spread"><h2>Dashboard</h2><a className="btn primary" href="#/web/cm/new">New analysis</a></div>
       <p style={{ margin: '4px 0 18px' }}>Last analyzed: {last ? fmtDT(last) : '—'} · {plural(analyzed.size, 'analyzed repository', 'analyzed repositories')} · {plural(S.sources.length, 'source')} connected</p>
       {running && (

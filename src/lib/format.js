@@ -30,3 +30,10 @@ export function focusFirstError() {
     if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
   }, 0);
 }
+
+export function ago(t) {
+  const d = Math.floor((Date.now() - t) / 86400000);
+  if (d < 1) return 'today';
+  if (d < 14) return d === 1 ? 'yesterday' : `${d} days ago`;
+  return `${Math.round(d / 7)} weeks ago`;
+}
