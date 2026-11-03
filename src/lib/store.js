@@ -9,7 +9,7 @@ export const defaults = () => ({
   service: null,
   homeBannerX: false, cmBannerX: false,
   sources: [], analyses: [], schedules: [], remediations: [], runs: [],
-  fstate: {}, ftrans: {}, infra: {}, seq: 1,
+  fstate: {}, ftrans: {}, infra: {}, skills: [], fgroups: [], seq: 1,
 });
 
 function load() {

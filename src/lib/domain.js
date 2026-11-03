@@ -150,10 +150,10 @@ const T = {
   docker: L => ({ title: 'Containerization candidate: no Dockerfile', sev: 'Low', fix: 'Automated', trans: 'AWS/containerize', file: L.file, desc: 'The application is stateless and suitable for containers, but has no container definition.', rec: 'Generate a Dockerfile and an Amazon ECS task definition.' }),
   serverless: L => ({ title: 'Serverless candidate: stateless request handlers', sev: 'Low', fix: 'Manual', trans: 'Manual', file: L.src, desc: 'Handlers are short-lived and stateless, a good fit for AWS Lambda.', rec: 'Evaluate moving handlers to Lambda behind API Gateway.' }),
   platform: L => ({ title: L.platform, sev: 'Medium', fix: 'Automated', trans: L.trans, file: L.file, desc: 'A newer major version of the application framework is available.', rec: 'Upgrade the framework; AWS Transform handles API changes between versions.' }),
-  hLambda: (L, r, repo) => !repoProfile(repo).eos ? null : ({ title: `Lambda ${L.runtime[0]} runtime deprecation scheduled`, sev: 'High', fix: 'Automated', trans: L.trans, file: 'template.yaml', desc: `AWS Health has a scheduled lifecycle event for the Lambda ${L.runtime[0]} runtime. After the deprecation date you can no longer create or update functions that use it.`, rec: `Upgrade the functions to ${L.runtime[1]} before the deadline. AWS Transform updates the code and the runtime setting together.` }),
-  hRds: () => ({ title: 'RDS for PostgreSQL 11 end of standard support', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/database.tf', desc: 'AWS Health reports that the PostgreSQL 11 engine this repository provisions has reached end of standard support. Instances move to paid Extended Support.', rec: 'Plan a major version upgrade to PostgreSQL 16 and test it against a snapshot.' }),
-  hEks: () => ({ title: 'Amazon EKS 1.27 end of standard support', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/cluster.tf', desc: 'AWS Health has scheduled the end of standard support for the EKS 1.27 cluster this repository defines.', rec: 'Upgrade the cluster and its add-ons one minor version at a time to 1.31.' }),
-  hTls: () => ({ title: 'AWS API endpoints require TLS 1.2', sev: 'Low', fix: 'Automated', trans: 'AWS/config-hardening', file: 'src/config', desc: 'AWS Health notified this account that clients connecting with TLS 1.0 or 1.1 will be rejected by AWS API endpoints.', rec: 'Configure the AWS SDK client to require TLS 1.2 or later.' }),
+  hLambda: (L, r, repo) => !repoProfile(repo).eos ? null : ({ title: `Lambda ${L.runtime[0]} runtime deprecation scheduled`, due: '2027-01-15T12:00:00', sev: 'High', fix: 'Automated', trans: L.trans, file: 'template.yaml', desc: `AWS Health has a scheduled lifecycle event for the Lambda ${L.runtime[0]} runtime. After the deprecation date you can no longer create or update functions that use it.`, rec: `Upgrade the functions to ${L.runtime[1]} before the deadline. AWS Transform updates the code and the runtime setting together.` }),
+  hRds: () => ({ title: 'RDS for PostgreSQL 11 end of standard support', due: '2027-02-28T12:00:00', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/database.tf', desc: 'AWS Health reports that the PostgreSQL 11 engine this repository provisions has reached end of standard support. Instances move to paid Extended Support.', rec: 'Plan a major version upgrade to PostgreSQL 16 and test it against a snapshot.' }),
+  hEks: () => ({ title: 'Amazon EKS 1.27 end of standard support', due: '2026-12-20T12:00:00', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/cluster.tf', desc: 'AWS Health has scheduled the end of standard support for the EKS 1.27 cluster this repository defines.', rec: 'Upgrade the cluster and its add-ons one minor version at a time to 1.31.' }),
+  hTls: () => ({ title: 'AWS API endpoints require TLS 1.2', due: '2027-03-31T12:00:00', sev: 'Low', fix: 'Automated', trans: 'AWS/config-hardening', file: 'src/config', desc: 'AWS Health notified this account that clients connecting with TLS 1.0 or 1.1 will be rejected by AWS API endpoints.', rec: 'Configure the AWS SDK client to require TLS 1.2 or later.' }),
   policyLog: L => ({ title: 'Policy: logging library not on approved list', sev: 'Medium', fix: 'Automated', trans: 'AWS/dependency-upgrade', file: L.file, desc: 'Your platform team requires the approved structured logging library.', rec: 'Replace the logging library with the approved one.' }),
   policyOwners: () => ({ title: 'Policy: CODEOWNERS file missing', sev: 'Low', fix: 'Automated', trans: 'AWS/docs-generation', file: 'CODEOWNERS', desc: 'Every repository must declare code owners.', rec: 'Add a CODEOWNERS file.' }),
   policyLic: L => ({ title: 'Policy: dependency with unapproved license (GPL-3.0)', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: L.file, desc: 'A dependency uses a license that is not on the approved list.', rec: 'Replace the dependency or request a license exception.' }),
@@ -253,7 +253,12 @@ export function allFindings() {
   cache = { key, val };
   return val;
 }
-export const fTrans = f => db().ftrans[f.key] || f.trans;
+export const fTrans = f => db().ftrans[f.key] || skillFor(f.key, true)?.name || f.trans;
+
+/* ---------- specialized skills: generated when no managed transformation covers a finding ---------- */
+export const skillState = sk => sk.cancelled ? 'Cancelled' : now() - sk.startedAt < sk.duration ? 'Generating' : 'Ready';
+export const skillProgress = sk => Math.min(1, (now() - sk.startedAt) / sk.duration);
+export const skillFor = (key, readyOnly) => (db().skills || []).find(sk => !sk.cancelled && sk.keys.includes(key) && (!readyOnly || skillState(sk) === 'Ready'));
 export function remStatus(r) {
   if (r.cancelled) return 'Cancelled';
   return now() - r.createdAt < 10000 + r.repos.length * 1500 ? 'In progress' : 'Completed';
@@ -288,7 +293,8 @@ export function isBusy() {
   const S = db();
   return S.analyses.some(a => aStatus(a) === 'In progress')
     || S.remediations.some(r => remStatus(r) === 'In progress')
-    || STACKS.some(s => /ing$/.test(stackStatus(s.name)));
+    || STACKS.some(s => /ing$/.test(stackStatus(s.name)))
+    || (S.skills || []).some(sk => skillState(sk) === 'Generating');
 }
 
 export const srcName = id => (db().sources.find(s => s.id === id) || {}).name || '(removed)';
