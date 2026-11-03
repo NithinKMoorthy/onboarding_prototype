@@ -141,12 +141,11 @@ export default function Findings({ q }) {
   const repos = [...new Set(all.map(x => x.repo))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const types = TYPES.filter(t => !t.hidden && all.some(x => x.type === t.id));
 
-  const remediate = keys => ready ? openModal('remediate', { keys, onDone: sel.clear }) : toast('Deploy remediation infrastructure in Settings first.');
+  const remediate = keys => ready && openModal('remediate', { keys, onDone: sel.clear });
   const act = (r, m) => {
-    const fs = (r.group || r).children;
     if (m.kind === 'none') setModal({ type: 'generate', r: r.group || r });
-    else if (m.kind === 'skill') setModal({ type: 'skill', skill: m.skill });
-    else if (m.kind === 'td') remediate(fs.filter(x => fStatus(x) === 'Open').map(x => x.key));
+    else if (m.kind === 'skill') toast('Review specialized skill is coming soon.');
+    else if (m.kind === 'td') toast('Review managed TD is coming soon.');
     else m.go?.();
   };
   function dismiss() {
@@ -186,7 +185,7 @@ export default function Findings({ q }) {
         <div className="row">
           {f.repo && <a className="btn" href={`#/web/cm/new?repo=${encodeURIComponent(f.repo)}`}>Analyze {f.repo}</a>}
           <button className="btn" onClick={dismiss} disabled={!openSel.length}>Dismiss</button>
-          <button className="btn primary" disabled={!openSel.length || !ready} title={ready ? '' : 'Deploy remediation infrastructure first'} onClick={() => remediate(openSel.map(x => x.key))}>Create remediation</button>
+          <button className="btn primary" disabled={!openSel.length || !ready} onClick={() => remediate(openSel.map(x => x.key))}>Create remediation</button>
         </div>
       </div>
       <nav className="tabs findings-tabs">
@@ -196,7 +195,7 @@ export default function Findings({ q }) {
           </a>
         ))}
       </nav>
-      {tab === 'skills' ? <SkillGenerations skills={skillRows} onReview={sk => setModal({ type: 'skill', skill: sk })} /> : <>
+      {tab === 'skills' ? <SkillGenerations skills={skillRows} onReview={() => toast('Review specialized skill is coming soon.')} /> : <>
         <div className="table-tools">
           <SearchInput value={f.q} onChange={set('q')} placeholder="Find findings" />
           <FilterSelect value={f.status} onChange={set('status')} aria-label="Status" options={STATUS} />
@@ -236,7 +235,6 @@ export default function Findings({ q }) {
       </>}
 
       {modal?.type === 'generate' && <GenerateSkillModal r={modal.r} onClose={() => setModal(null)} />}
-      {modal?.type === 'skill' && <SkillModal skill={modal.skill} onClose={() => setModal(null)} onRemediate={keys => { setModal(null); remediate(keys); }} />}
       {modal?.type === 'group' && <CustomGroupModal keys={selected.map(x => x.key)} onClose={() => setModal(null)} onDone={() => { sel.clear(); setTab('groups'); }} />}
     </div>
   );
@@ -423,28 +421,6 @@ function GenerateSkillModal({ r, onClose }) {
         <span><b>Auto-remediate when the skill is ready</b>
           <span className="muted small" style={{ display: 'block' }}>After validation, runs on {plural(repos.length, 'repository', 'repositories')} and opens {repos.length === 1 ? 'a pull request' : 'pull requests'}. You still review and merge.</span></span>
       </label>
-    </Modal>
-  );
-}
-
-// A generated skill, ready to review before it runs.
-function SkillModal({ skill, onClose, onRemediate }) {
-  const fs = allFindings().filter(x => skill.keys.includes(x.key));
-  const open = fs.filter(x => fStatus(x) === 'Open');
-  return (
-    <Modal title={`Review skill: ${skill.title}`} wide onClose={onClose}
-      footer={<><button className="btn link" onClick={onClose}>Close</button><button className="btn primary" disabled={!open.length} onClick={() => onRemediate(open.map(x => x.key))}>Create remediation</button></>}>
-      <Alert type="success" title="Passed validation">AWS Transform tested <span className="mono">{skill.name}</span> against {plural(fs.length, 'finding')} and checked for regressions. It used {skill.minutes} agent minutes.</Alert>
-      <h4 className="gen-h">What the skill does</h4>
-      <ul className="gen-why">
-        <li>Reads how each repository is structured before changing it</li>
-        <li>Resolves "{fs[0]?.title}" and updates the related tests and configuration</li>
-        <li>Runs the build and tests, and stops if anything regresses</li>
-      </ul>
-      <table className="tbl" style={{ marginTop: 8 }}>
-        <thead><tr><th>Finding</th><th>Repository</th><th>Status</th></tr></thead>
-        <tbody>{fs.map(x => <tr key={x.key}><td>{x.title}</td><td>{x.repo}</td><td>{fStatus(x)}</td></tr>)}</tbody>
-      </table>
     </Modal>
   );
 }

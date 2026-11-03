@@ -387,7 +387,7 @@ table.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 .split > .menu-wrap > .btn { border-radius: 0 20px 20px 0; padding: 6px 10px; margin-left: 1px; }
 
 /* Get started flow */
-.gs { display: grid; grid-template-columns: 200px minmax(0, 1200px); gap: 40px; align-items: start; margin-top: 8px; }
+.gs { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 40px; align-items: start; margin-top: 8px; }
 .gs-steps { list-style: none; margin: 0; padding: 0; position: sticky; top: 80px; }
 .gs-steps li { padding: 12px 0; border-bottom: 1px solid var(--border-light); }
 .gs-steps li:first-child { padding-top: 0; }

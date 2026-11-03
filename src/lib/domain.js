@@ -39,7 +39,7 @@ export function providerHost(src) {
 // Per-analysis copy used by the Get started flow.
 export const ANALYSIS_META = {
   quick: { short: 'quick scan', freq: 'Weekly', why: 'Fast and low cost. Catches newly outdated dependencies.' },
-  comprehensive: { short: 'comprehensive', freq: 'Monthly', why: 'A deeper review. Code quality and architecture change more slowly.',
+  comprehensive: { short: 'comprehensive', freq: 'Weekly', why: 'New dependency versions ship every week, so weekly keeps the backlog current.',
     learn: 'What upgrading involves in the code, across dependencies, code quality, architecture, performance and infrastructure.', get: 'Code-level tech debt findings for each repository' },
   modernization: { short: 'modernization', freq: 'Monthly', why: 'Opportunities shift as remediations merge and repositories change.',
     learn: 'Which of them can also move to containers, serverless or a newer platform, so you modernize once instead of upgrading twice.', get: 'Modernization readiness for each repository' },
