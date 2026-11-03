@@ -3,28 +3,29 @@ import { fmtTime, plural } from '../../lib/format';
 import { Dropdown, Icon, Select } from '../../components/ui';
 
 /* The continuous-analysis plan shared by Get started (Schedule and run) and Run new analysis:
-   one row per analysis with its frequency and why, plus the shared run day and time. */
+   one row per analysis with its frequency and why it's worth running, plus the shared run day and time. */
 
 export const FREQ_OPTIONS = ['Once', 'Daily', 'Weekly', 'Monthly'];
 export const isRecurring = (types, freqs) => types.some(t => freqs[t] !== 'Once');
 
-export const ORDER = ['security', 'comprehensive', 'modernization', 'agentic', 'quick', 'custom'];
+export const ORDER = ['health', 'comprehensive', 'modernization', 'agentic', 'quick', 'custom'];
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const TIMES = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`);
 
-// Why each analysis runs as often as it does, grounded in an estate scan.
-export function whyFromScan(t, e, f) {
-  const fl = f.toLowerCase();
+// Why each analysis is worth running, grounded in an estate scan.
+export function whyFromScan(t, e) {
   const top = e.exposures.slice(0, 2).map(x => x.name.replace(/ runtime$/, ''));
   return {
-    security: <><b>{e.exposures[0]?.repos || e.eos} repositories</b> run {top.join(' or ') || 'end-of-support runtimes'}, which no longer get security patches. New CVEs against them can appear any week, so {fl} keeps the exposure window short.</>,
-    comprehensive: <><b>{e.deps} outdated dependencies</b> across {e.repos} repositories, and new versions ship every week. {f} keeps the backlog accurate, so remediations target current versions, not ones already superseded.</>,
-    modernization: <><b>{e.upgrade} repositories</b> need a runtime or framework upgrade. As those upgrades land, what can move to containers or serverless changes, so {fl} keeps the list current.</>,
-    agentic: <><b>{e.eos} repositories</b> need remediation that agents carry out. Readiness shifts as APIs, authentication and documentation improve, so {fl} keeps the scores current.</>,
-    quick: <><b>{e.repos} repositories</b> of package manifests. A fast, low-cost check, so {fl} catches newly outdated dependencies early.</>,
-    custom: <>Checks your platform team's policies across <b>{e.repos} repositories</b>. {f} re-checks catch drift as code changes.</>,
+    health: <><b>{plural(e.eos, 'repository', 'repositories')}</b> run {orList(e.langs.filter(l => l.eos && l.runtime).map(l => l.runtime)) || 'runtimes'} that AWS Health has scheduled for deprecation. This shows which deployed resources each event affects and the date you need to act by.</>,
+    security: <><b>{e.exposures[0]?.repos || e.eos} repositories</b> run {top.join(' or ') || 'end-of-support runtimes'}, which no longer get security patches. This checks them for known CVEs, exposed secrets and insecure configuration.</>,
+    comprehensive: <><b>{e.deps} outdated dependencies</b> across {e.repos} repositories. This reviews the code itself, so you see what upgrading involves across code quality, architecture and infrastructure, not just the version numbers.</>,
+    modernization: <><b>{e.upgrade} repositories</b> need a runtime or framework upgrade. Since they'll change anyway, this shows which can also move to containers or serverless in the same pass.</>,
+    agentic: <><b>{e.eos} repositories</b> need remediation that agents carry out. This scores API design, authentication and documentation, so you know where agents can work reliably.</>,
+    quick: <><b>{e.repos} repositories</b> of package manifests. A fast, low-cost check that flags outdated dependencies between deeper reviews.</>,
+    custom: <>Checks your platform team's own policies across <b>{e.repos} repositories</b>, so policy gaps show up next to the rest of your findings.</>,
   }[t];
 }
+const orList = xs => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs.at(-1)}`;
 
 export function ScheduleTable({ org, intro, types, freqs, setFreq, onAdd, onRemove, why, def, setDef, day, setDay, time, setTime, aside }) {
   return (
@@ -32,7 +33,7 @@ export function ScheduleTable({ org, intro, types, freqs, setFreq, onAdd, onRemo
       <h2>Continuous analysis for {org}</h2>
       <p style={{ margin: '4px 0 16px', maxWidth: 760, color: '#414d5c' }}>{intro}</p>
       <table className="tbl sched-tbl">
-        <thead><tr><th style={{ width: 220 }}>Analysis</th><th style={{ width: 170 }}>Runs</th><th>Why this frequency</th><th className="cb" /></tr></thead>
+        <thead><tr><th style={{ width: 220 }}>Analysis</th><th style={{ width: 170 }}>Runs</th><th>Why this analysis</th><th className="cb" /></tr></thead>
         <tbody>
           {types.map(t => (
             <tr key={t}>
@@ -40,9 +41,7 @@ export function ScheduleTable({ org, intro, types, freqs, setFreq, onAdd, onRemo
                 {t === 'custom' && <Select className="fsel small" aria-label="Transformation definition" value={def} onChange={setDef} options={CUSTOM_DEFS} style={{ display: 'block', marginTop: 6 }} />}
               </td>
               <td style={{ verticalAlign: 'top' }}><Dropdown ariaLabel={`${typeName(t)} frequency`} value={freqs[t]} onChange={v => setFreq(t, v)} options={FREQ_OPTIONS} style={{ width: 150 }} /></td>
-              <td style={{ verticalAlign: 'top' }}>{freqs[t] === 'Once'
-                ? <>Runs <b>once, today</b>. These findings won't update as your code changes, so pick a frequency to keep them current.</>
-                : why(t, freqs[t])}</td>
+              <td style={{ verticalAlign: 'top' }}>{why(t)}</td>
               <td style={{ verticalAlign: 'top' }}><button className="copy" aria-label={`Remove ${typeName(t)}`} onClick={() => onRemove(t)}><Icon n="x" /></button></td>
             </tr>
           ))}

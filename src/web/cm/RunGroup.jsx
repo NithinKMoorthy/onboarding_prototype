@@ -148,6 +148,7 @@ export default function RunGroup({ id }) {
 
 const STAT3 = {
   comprehensive: ['On end-of-support runtimes', (F, e) => e.eos],
+  health: ['Scheduled AWS deadlines', F => F.length],
   security: ['High severity findings', F => F.filter(f => f.sev === 'High').length],
   modernization: ['Container candidates', F => new Set(F.filter(f => f.cat === 'Containers').map(f => f.repo)).size],
   agentic: ['Missing API specs or docs', F => new Set(F.filter(f => ['API design', 'Documentation'].includes(f.cat)).map(f => f.repo)).size],

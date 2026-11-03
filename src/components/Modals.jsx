@@ -325,7 +325,7 @@ function CompareTypesModal() {
   return (
     <Modal title="Analysis types" wide footer={<Done />}>
       <div className="stack">
-        {TYPES.map(t => (
+        {TYPES.filter(t => !t.hidden).map(t => (
           <div key={t.id} className="row" style={{ alignItems: 'flex-start' }}>
             <span className={`ico ${t.ico}`}><Icon n={t.icon} s={22} /></span>
             <div className="grow"><b>{t.name}</b><div className="muted">{t.desc}</div></div>

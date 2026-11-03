@@ -33,8 +33,8 @@ export function createSource(c) {
   return commit(S => {
     const s = {
       id: nid('src'), name: c.name.trim(), provider: c.provider, org: c.org.trim(), url: (c.url || '').trim(),
-      includePublic: isGh && c.includePublic, branch: (c.branch || '').trim(), commit: (c.commit || '').trim(), author: (c.author || '').trim(), email: (c.email || '').trim(),
-      repos: genRepos(isGh && c.includePublic), createdAt: Date.now(),
+      auth: isGh && c.auth === 'app' ? 'app' : 'token', includePublic: isGh && c.includePublic, branch: (c.branch || '').trim(), commit: (c.commit || '').trim(), author: (c.author || '').trim(), email: (c.email || '').trim(),
+      repos: (c.repoList || genRepos(isGh && c.includePublic)).filter(r => !c.selected || c.selected.includes(r.name)), createdAt: Date.now(),
     };
     S.sources.push(s);
     return s;

@@ -13,9 +13,10 @@ import { FREQ_OPTIONS, ORDER, ReviewBox, ScheduleTable, isRecurring, whyFromScan
 // Roles in this account that AWS Transform can assume (simulated).
 const ROLES = ['AWSTransformExecutionRole', 'ATX-ContinuousModernization-Role', 'platform-eng-transform-role', 'security-scanning-role'];
 // Catalog layout: every analysis type, with a one-line pitch grounded in the last analysis when there is one.
-const CATALOG = ['comprehensive', 'security', 'modernization', 'agentic', 'quick', 'custom'];
+const CATALOG = ['comprehensive', 'health', 'modernization', 'agentic', 'quick', 'custom'];
 const GENERIC = {
   comprehensive: 'Code-level review across dependencies, code quality, architecture, performance and infrastructure, so you know what upgrading involves.',
+  health: 'Matches scheduled AWS Health lifecycle events, such as Lambda runtime deprecations and database end of support, to the repositories that deploy the affected resources.',
   security: 'Checks code and dependencies for known CVEs, exposed secrets and insecure configurations, using the AWS Security Agent.',
   modernization: 'Finds repositories that could move to containers, serverless or a newer platform, so upgrades and bigger modernization happen in one pass.',
   agentic: 'Scores API design, authentication patterns and documentation, so you know where agent-driven remediation will go smoothly.',
@@ -39,18 +40,18 @@ function lastAnalyzed(S, sourceId) {
   return m;
 }
 
-// Why each analysis runs as often as it does, grounded in the last analysis. Falls back to the scan.
-function whyFromLast(t, f, { prev, src, last }) {
+// Why each analysis is worth running, grounded in the last analysis. Falls back to the scan.
+function whyFromLast(t, { prev, src, last }) {
   const F = aFindings(prev);
   const deps = [...new Set(F.map(x => x.title.match(/^Outdated dependency: (\S+)/)?.[1]).filter(Boolean))];
   const vulnerable = deps.filter(d => CVE_PKGS.includes(d)).slice(0, 3);
   const depRepos = new Set(F.filter(x => /^Outdated dependency/.test(x.title)).map(x => x.repo));
   const never = src.repos.filter(r => !last[r.name]).length;
-  const when = short(prev.startedAt), fl = f.toLowerCase();
-  if (t === 'security' && vulnerable.length) return <><b>{listOf(vulnerable)}</b> were flagged as outdated on {when}, and those versions have publicly known vulnerabilities. New CVEs can appear any week, so {fl} keeps the exposure window short.</>;
-  if (t === 'comprehensive' && never) return <><b>{never} of {src.repos.length} repositories</b> have never been analyzed, and the other {src.repos.length - never} haven't been checked since {when}. {f} builds the full backlog quickly and keeps it accurate as new versions ship.</>;
-  if (t === 'modernization' && depRepos.size) return <><b>{plural(depRepos.size, 'repository', 'repositories')}</b> already {depRepos.size === 1 ? 'has' : 'have'} findings that call for upgrading {orOf(deps.slice(0, 3))}. Since they will change anyway, {fl} shows what else can move to containers or serverless.</>;
-  return whyFromScan(t, estate(src.repos.map(r => r.name)), f);
+  const when = short(prev.startedAt);
+  if (t === 'security' && vulnerable.length) return <><b>{listOf(vulnerable)}</b> were flagged as outdated on {when}, and those versions have publicly known vulnerabilities. This checks whether you are actually exposed.</>;
+  if (t === 'comprehensive' && never) return <><b>{never} of {src.repos.length} repositories</b> have never been analyzed, and the other {src.repos.length - never} haven't been checked since {when}. This builds the full tech debt backlog to plan against.</>;
+  if (t === 'modernization' && depRepos.size) return <><b>{plural(depRepos.size, 'repository', 'repositories')}</b> already {depRepos.size === 1 ? 'has' : 'have'} findings that call for upgrading {orOf(deps.slice(0, 3))}. Since they will change anyway, this shows what else can move to containers or serverless.</>;
+  return whyFromScan(t, estate(src.repos.map(r => r.name)));
 }
 
 function pitch(t, { prev, src, last }) {
@@ -69,9 +70,10 @@ function pitch(t, { prev, src, last }) {
 
 // Advice for the analysis a user arrived on, and which analysis pairs well with it.
 const PAIRS = {
+  health: ['comprehensive', 'so AWS deadlines land next to the upgrade work they require'],
   security: ['quick', 'to catch outdated dependencies early'],
-  quick: ['security', 'to check whether those outdated versions are actually vulnerable'],
-  comprehensive: ['security', 'because new CVEs appear between the deeper runs'],
+  quick: ['health', 'to see which outdated runtimes also have an AWS deadline'],
+  comprehensive: ['health', 'because AWS schedules new lifecycle events between the deeper runs'],
   modernization: ['comprehensive', 'so you see the upgrade work and the modernization options together'],
   agentic: ['comprehensive', 'so you know what needs remediating as well as where agents can do it'],
   custom: ['comprehensive', 'so policy gaps land next to the rest of your tech debt'],
@@ -82,6 +84,7 @@ function advice(t, freq, { prev, src, last }) {
   const never = src.repos.filter(r => !last[r.name]).length;
   const when = prev && short(prev.startedAt);
   const why = {
+    health: 'AWS Health posts new scheduled changes every week, so a regular check catches deadlines early.',
     security: `New CVEs are published every day${deps.length ? `, and your ${when} results already flagged ${listOf(deps)}` : ''}.`,
     quick: 'It only reads package manifests, so it is cheap to run often.',
     comprehensive: `It reviews code rather than manifests, so it is slower and deeper.${never ? ` ${never} of your ${src.repos.length} repositories have never been analyzed.` : ''}`,
@@ -139,7 +142,7 @@ export default function NewAnalysis() {
   const shown = ordered.filter(r => !repoQ || r.name.toLowerCase().includes(repoQ.toLowerCase()));
   const pg = usePager(shown.length, 6, repoQ + w.sourceId);
 
-  const why = (t, f) => prev ? whyFromLast(t, f, { prev, src, last }) : whyFromScan(t, estate(src.repos.map(r => r.name)), f);
+  const why = t => prev ? whyFromLast(t, { prev, src, last }) : whyFromScan(t, estate(src.repos.map(r => r.name)));
 
   function begin() {
     const er = {};

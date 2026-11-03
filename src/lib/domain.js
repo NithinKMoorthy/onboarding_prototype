@@ -12,7 +12,8 @@ export const DAY = 86400000;
 export const TYPES = [
   { id: 'quick', name: 'Tech debt (quick)', icon: 'timer', ico: 'orange', desc: 'Scans package manifests to identify outdated dependencies and stale versions, returning results in minutes.' },
   { id: 'comprehensive', name: 'Tech debt (comprehensive)', icon: 'chart', ico: 'blue', desc: 'Performs a deep, code-level review of your repositories to surface technical debt across dependencies, code quality, architecture, performance, and infrastructure.' },
-  { id: 'security', name: 'Security', icon: 'shield', ico: 'red', desc: 'Detects CVEs, exposed secrets, and insecure configurations in your source code and dependencies, using the AWS Security Agent.' },
+  { id: 'security', hidden: true, name: 'Security', icon: 'shield', ico: 'red', desc: 'Detects CVEs, exposed secrets, and insecure configurations in your source code and dependencies, using the AWS Security Agent.' },
+  { id: 'health', name: 'AWS Health', icon: 'bell', ico: 'red', desc: 'Matches scheduled AWS Health lifecycle events, such as Lambda runtime deprecations and database engine end of support, to the repositories that deploy the affected resources.' },
   { id: 'agentic', name: 'Agentic readiness', icon: 'bot', ico: 'purple', desc: 'Assesses how ready your repositories are for AI agents to work in, evaluating API design, authentication patterns, and documentation across a defined set of criteria.' },
   { id: 'modernization', name: 'Modernization readiness', icon: 'trend', ico: 'green', desc: 'Evaluates your applications for containerization, serverless migration, and platform-upgrade opportunities.' },
   { id: 'custom', name: 'Custom', icon: 'term', ico: 'violet', desc: 'Runs a transformation definition of your choice as an analysis, including organization-specific policies your platform team maintains.' },
@@ -45,6 +46,7 @@ export const ANALYSIS_META = {
   agentic: { short: 'agentic', freq: 'Monthly', why: 'Tracks readiness as APIs, authentication and documentation improve.',
     learn: 'How well agents can work in each repository, based on API design, authentication patterns and documentation, so you know where remediation will go smoothly.', get: 'Agentic readiness for each repository' },
   security: { short: 'security', freq: 'Weekly', why: 'New CVEs are published every day, so weekly keeps exposure windows short.', get: 'Security findings: CVEs, exposed secrets and insecure configuration' },
+  health: { short: 'AWS Health', freq: 'Weekly', why: 'AWS Health posts new scheduled changes every week, so weekly catches deadlines early.', get: 'Scheduled AWS lifecycle events mapped to the repositories they affect' },
   custom: { short: 'custom', freq: 'Monthly', why: "Re-checks your organization's policies as code changes.", get: 'Policy findings from your transformation definition' },
 };
 
@@ -148,6 +150,10 @@ const T = {
   docker: L => ({ title: 'Containerization candidate: no Dockerfile', sev: 'Low', fix: 'Automated', trans: 'AWS/containerize', file: L.file, desc: 'The application is stateless and suitable for containers, but has no container definition.', rec: 'Generate a Dockerfile and an Amazon ECS task definition.' }),
   serverless: L => ({ title: 'Serverless candidate: stateless request handlers', sev: 'Low', fix: 'Manual', trans: 'Manual', file: L.src, desc: 'Handlers are short-lived and stateless, a good fit for AWS Lambda.', rec: 'Evaluate moving handlers to Lambda behind API Gateway.' }),
   platform: L => ({ title: L.platform, sev: 'Medium', fix: 'Automated', trans: L.trans, file: L.file, desc: 'A newer major version of the application framework is available.', rec: 'Upgrade the framework; AWS Transform handles API changes between versions.' }),
+  hLambda: (L, r, repo) => !repoProfile(repo).eos ? null : ({ title: `Lambda ${L.runtime[0]} runtime deprecation scheduled`, sev: 'High', fix: 'Automated', trans: L.trans, file: 'template.yaml', desc: `AWS Health has a scheduled lifecycle event for the Lambda ${L.runtime[0]} runtime. After the deprecation date you can no longer create or update functions that use it.`, rec: `Upgrade the functions to ${L.runtime[1]} before the deadline. AWS Transform updates the code and the runtime setting together.` }),
+  hRds: () => ({ title: 'RDS for PostgreSQL 11 end of standard support', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/database.tf', desc: 'AWS Health reports that the PostgreSQL 11 engine this repository provisions has reached end of standard support. Instances move to paid Extended Support.', rec: 'Plan a major version upgrade to PostgreSQL 16 and test it against a snapshot.' }),
+  hEks: () => ({ title: 'Amazon EKS 1.27 end of standard support', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: 'infra/cluster.tf', desc: 'AWS Health has scheduled the end of standard support for the EKS 1.27 cluster this repository defines.', rec: 'Upgrade the cluster and its add-ons one minor version at a time to 1.31.' }),
+  hTls: () => ({ title: 'AWS API endpoints require TLS 1.2', sev: 'Low', fix: 'Automated', trans: 'AWS/config-hardening', file: 'src/config', desc: 'AWS Health notified this account that clients connecting with TLS 1.0 or 1.1 will be rejected by AWS API endpoints.', rec: 'Configure the AWS SDK client to require TLS 1.2 or later.' }),
   policyLog: L => ({ title: 'Policy: logging library not on approved list', sev: 'Medium', fix: 'Automated', trans: 'AWS/dependency-upgrade', file: L.file, desc: 'Your platform team requires the approved structured logging library.', rec: 'Replace the logging library with the approved one.' }),
   policyOwners: () => ({ title: 'Policy: CODEOWNERS file missing', sev: 'Low', fix: 'Automated', trans: 'AWS/docs-generation', file: 'CODEOWNERS', desc: 'Every repository must declare code owners.', rec: 'Add a CODEOWNERS file.' }),
   policyLic: L => ({ title: 'Policy: dependency with unapproved license (GPL-3.0)', sev: 'Medium', fix: 'Manual', trans: 'Manual', file: L.file, desc: 'A dependency uses a license that is not on the approved list.', rec: 'Replace the dependency or request a license exception.' }),
@@ -156,10 +162,11 @@ const CAT = {
   dep: 'Dependencies', runtime: 'Dependencies', api: 'Code quality', dup: 'Code quality', sync: 'Performance', config: 'Infrastructure', tests: 'Code quality',
   cve: 'Vulnerabilities', secret: 'Secrets', tls: 'Configuration', cors: 'Configuration',
   openapi: 'API design', auth: 'Authentication', docs: 'Documentation', errors: 'API design',
+  hLambda: 'Lambda', hRds: 'Databases', hEks: 'Containers', hTls: 'Configuration',
   docker: 'Containers', serverless: 'Serverless', platform: 'Platform', policyLog: 'Policy', policyOwners: 'Policy', policyLic: 'Policy',
 };
-const BY_TYPE = { quick: ['dep', 'dep', 'dep', 'runtime'], comprehensive: ['dep', 'dep', 'runtime', 'api', 'dup', 'sync', 'config', 'tests'], security: ['cve', 'cve', 'secret', 'tls', 'cors'], agentic: ['openapi', 'auth', 'docs', 'errors'], modernization: ['docker', 'serverless', 'platform', 'runtime'], custom: ['policyLog', 'policyOwners', 'policyLic'] };
-const COUNT = { quick: [1, 3], comprehensive: [2, 6], security: [0, 3], agentic: [1, 3], modernization: [1, 3], custom: [0, 2] };
+const BY_TYPE = { quick: ['dep', 'dep', 'dep', 'runtime'], comprehensive: ['dep', 'dep', 'runtime', 'api', 'dup', 'sync', 'config', 'tests'], security: ['cve', 'cve', 'secret', 'tls', 'cors'], health: ['hLambda', 'hLambda', 'hRds', 'hEks', 'hTls'], agentic: ['openapi', 'auth', 'docs', 'errors'], modernization: ['docker', 'serverless', 'platform', 'runtime'], custom: ['policyLog', 'policyOwners', 'policyLic'] };
+const COUNT = { quick: [1, 3], comprehensive: [2, 6], security: [0, 3], health: [1, 3], agentic: [1, 3], modernization: [1, 3], custom: [0, 2] };
 
 function shuffle(arr, r) {
   const a = [...arr];
@@ -322,7 +329,7 @@ export const showLanding = S => !S.analyses.length || (!!S.onboarding && S.analy
 
 /* ---------- recommendations ---------- */
 // The recommended plan for an existing source, in display order.
-export const PLAN = ['security', 'comprehensive', 'modernization'];
+export const PLAN = ['health', 'comprehensive', 'modernization'];
 
 // "Security weekly and the others monthly", from [name, frequency] pairs.
 export function scheduleSummary(pairs) {

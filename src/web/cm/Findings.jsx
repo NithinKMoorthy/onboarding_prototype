@@ -53,7 +53,7 @@ export default function Findings({ q }) {
       <div className="table-tools">
         <SearchInput value={f.q} onChange={set('q')} placeholder="Find findings" />
         <FilterSelect value={f.status} onChange={set('status')} aria-label="Status" options={['Open', 'In remediation', 'Remediated', 'Dismissed', ['all', 'All statuses']]} />
-        <FilterSelect value={f.type} onChange={set('type')} aria-label="Analysis type" options={[['', 'All types'], ...TYPES.map(t => [t.id, t.name])]} />
+        <FilterSelect value={f.type} onChange={set('type')} aria-label="Analysis type" options={[['', 'All types'], ...TYPES.filter(t => !t.hidden).map(t => [t.id, t.name])]} />
         <FilterSelect value={f.repo} onChange={set('repo')} aria-label="Repository" options={[['', 'All repos'], ...repos]} />
         <FilterSelect value={f.fix} onChange={set('fix')} aria-label="Fix type" options={[['', 'All fix types'], ['Automated', 'Automated fix'], ['Manual', 'Manual fix']]} />
         {pg.el}

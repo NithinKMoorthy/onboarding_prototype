@@ -28,7 +28,7 @@ export default function WebApp({ parts }) {
 
   const sec = parts[0] || '';
   const isCm = sec === 'cm';
-  // The first-run landing, Get started, Run new analysis and run-group pages are focused: navigation open, no banner or Ask panel.
+  // The first-run landing, Get started, Run new analysis and run-group pages are focused: navigation collapsed (open via the menu button), no banner or Ask panel.
   const focused = isCm && (['get-started', 'new', 'runs'].includes(parts[1]) || (!parts[1] && showLanding(S)));
   const bannerKey = isCm ? 'cmBannerX' : 'homeBannerX';
   const banner = S[bannerKey] || focused ? null : isCm
@@ -59,7 +59,7 @@ export default function WebApp({ parts }) {
         </div>
       )}
       <div className="w-body">
-        {(ui.drawer || focused) && (
+        {ui.drawer && (
           <nav className="w-drawer">
             <a href="#/web" className={sec === '' ? 'active' : ''}>Home</a>
             <a href="#/web/cm" className={isCm ? 'active' : ''}>Continuous modernization</a>

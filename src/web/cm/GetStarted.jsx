@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { commit, nid, useStore } from '../../lib/store';
+import { commit, db, nid, useStore } from '../../lib/store';
 import { go } from '../../lib/router';
-import { ANALYSIS_META, CUSTOM_DEFS, PLAN, PROVIDERS, aDone, stackStatus, aStatus, repoStates, createAnalysis, estate, providerHost, startRun, typeName } from '../../lib/domain';
+import { ANALYSIS_META, CUSTOM_DEFS, PLAN, PROVIDERS, aDone, aEnd, aFindings, genRepos, langOf, stackStatus, aStatus, repoStates, createAnalysis, estate, providerHost, startRun, typeName } from '../../lib/domain';
 import { focusFirstError, plural } from '../../lib/format';
-import { Alert, Breadcrumbs, Choice, ErrorText, Field, Icon, Select, Spinner, Status, TextInput, Tile } from '../../components/ui';
+import { Alert, Breadcrumbs, Choice, ErrorText, Field, Icon, SearchInput, Select, Spinner, Status, TextInput, Tile, usePager } from '../../components/ui';
 import { createSource, validateSource } from './ConnectSource';
+import GitHubPopup from './GitHubPopup';
 import { ORDER, ReviewBox, ScheduleTable, isRecurring, whyFromScan } from './ScheduleTable';
 
 /* First-run flow: connect a source → quick scan → recommended analyses on a schedule. */
@@ -57,11 +58,15 @@ const Head = ({ title, children }) => <div className="gs-head"><h1>{title}</h1>{
 
 /* ---------- step 1 ---------- */
 function ConnectStep({ src, onDone }) {
-  const [c, setC] = useState({ provider: 'github', org: '', token: '', url: '', includePublic: false, name: '', infra: 'managed', roleMode: 'create', role: '' });
+  const [c, setC] = useState({ provider: 'github', auth: 'app', org: '', token: '', url: '', includePublic: false, repoMode: 'all', selected: [], name: '', infra: 'managed', roleMode: 'create', role: '' });
   const [runsOpen, setRunsOpen] = useState(false);
   const [nameTouched, setNameTouched] = useState(false);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
+  // Repositories the verified token can see (all visibilities), or null until verified.
+  const [verified, setVerified] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+  const [repoOpen, setRepoOpen] = useState(false);
   const pv = PROVIDERS[c.provider];
   const suggest = (org, provider) => org.trim() ? `${org.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')}-${provider}`.slice(0, 64) : '';
   const set = k => v => {
@@ -74,8 +79,37 @@ function ConnectStep({ src, onDone }) {
   };
 
   const stackSt = stackStatus(RUN_STACK);
+  // Organization is optional: blank means every repository the token can access, shown under the source name.
+  // GitHub only: sign in with the AWS Connector app (default) or paste a personal access token.
+  const useApp = c.provider === 'github' && c.auth === 'app';
+  const resolved = () => ({ ...c, org: c.org.trim() || 'all', token: useApp ? 'aws-connector-app' : c.token });
+  const resetAccess = patch => { setVerified(null); setRepoOpen(false); setErrors({}); setC(p => ({ ...p, token: '', repoMode: 'all', selected: [], includePublic: false, ...patch })); };
+
+  // Opens the simulated GitHub window, where the user picks an account and the repositories the app can access.
+  function connectApp() {
+    setErrors(e => ({ ...e, app: undefined }));
+    setVerifying(true);
+  }
+  function onInstalled({ org, repos, mode }) {
+    setVerifying(false);
+    setRepoOpen(false);
+    setC(p => ({ ...p, org, appMode: mode, includePublic: true, repoMode: 'all', selected: [], name: nameTouched ? p.name : suggest(org, 'github') }));
+    setVerified(repos);
+  }
+
+  function verify() {
+    const tokenErr = validateSource(resolved()).token;
+    setErrors(e => ({ ...e, token: tokenErr }));
+    if (tokenErr) { setTimeout(focusFirstError); return; }
+    setVerifying(true);
+    setTimeout(() => { setVerifying(false); setVerified(genRepos(c.provider === 'github')); }, 1000);
+  }
+
   function connect() {
-    const e = validateSource(c);
+    const e = validateSource(resolved());
+    if (useApp && !verified) e.app = 'Connect to GitHub to continue.';
+    else if (!e.token && !verified) e.token = 'Verify the token to continue.';
+    if (verified && c.repoMode === 'choose' && !c.selected.length) { e.repos = 'Choose at least one repository.'; setRepoOpen(true); }
     if (c.infra === 'managed' && c.roleMode === 'existing' && !c.role) e.role = 'Choose a role, or let AWS Transform create one.';
     if (c.infra === 'customer' && stackSt !== 'Deployed') e.stack = stackSt === 'Not deployed' ? 'Deploy the stack first, or run on AWS managed.' : 'Wait for the stack to finish deploying.';
     setErrors(e);
@@ -83,7 +117,7 @@ function ConnectStep({ src, onDone }) {
     if (Object.keys(e).length) { setTimeout(focusFirstError); return; }
     setBusy(true);
     setTimeout(() => {
-      const s = createSource(c);
+      const s = createSource({ ...c, token: resolved().token, repoList: useApp ? verified : null, org: c.org.trim() || c.name.trim(), selected: c.repoMode === 'choose' ? c.selected : null });
       commit(S => {
         const a = createAnalysis(S, nid('an'), { name: `${s.name} quick scan`, type: 'quick', selected: s.repos.map(r => r.name), infra: c.infra, stack: RUN_STACK }, s, null);
         a.fast = true;
@@ -133,41 +167,60 @@ function ConnectStep({ src, onDone }) {
         <div className="prov-tiles" role="radiogroup" aria-label="Provider">
           {Object.entries(PROVIDERS).map(([k, p]) => (
             <label key={k} className={`prov-tile ${c.provider === k ? 'selected' : ''}`}>
-              <input type="radio" name="gs-provider" checked={c.provider === k} onChange={() => { set('provider')(k); setErrors({}); }} />
+              <input type="radio" name="gs-provider" checked={c.provider === k} onChange={() => { set('provider')(k); resetAccess({ auth: 'app' }); }} />
               <span><b>{p.name}</b><div className="small muted">{p.short}</div></span>
             </label>
           ))}
         </div>
       </div>
-      <div className="container">
+      <div className="container access">
         <h2>Access</h2>
-        <p className="muted" style={{ margin: '4px 0 0' }}>AWS Transform stores your token encrypted.</p>
+        <p className="muted" style={{ margin: '4px 0 20px' }}>{useApp ? 'AWS Transform uses the permissions you approve for the AWS Connector app. No token to store or rotate.' : 'AWS Transform stores your token encrypted.'}</p>
+        {c.provider === 'github' && (
+          <div className="field" role="radiogroup" aria-label="How to connect">
+            <span className="field-label">How to connect</span>
+            <Choice name="gs-auth" checked={c.auth === 'app'} onChange={() => resetAccess({ auth: 'app' })} label="Sign in with GitHub"
+              desc="Approve the AWS Connector app for your organization. No token to create or rotate." />
+            <Choice name="gs-auth" checked={c.auth === 'token'} onChange={() => resetAccess({ auth: 'token' })} label="Personal access token"
+              desc="For GitHub Enterprise Server, or if your organization doesn't allow app installs." />
+          </div>
+        )}
+        <Field id="gs-name" label="Source name" desc="How this connection appears in AWS Transform." error={errors.name}
+          hint={!errors.name && (nameTouched || !c.org ? '1–64 characters: letters, numbers and hyphens.' : 'Suggested from your organization.')}>
+          <TextInput id="gs-name" invalid={errors.name} placeholder="e.g. acme-github" value={c.name} onChange={v => { setNameTouched(true); set('name')(v); }} />
+        </Field>
         {pv.url && (
           <Field id="gs-url" label={pv.url} error={errors.url} hint={c.provider === 'gitlab' ? 'Leave empty for GitLab.com.' : 'Leave empty for Bitbucket Cloud.'}>
             <TextInput id="gs-url" invalid={errors.url} placeholder={c.provider === 'gitlab' ? 'https://gitlab.com' : 'https://bitbucket.example.com'} value={c.url} onChange={set('url')} />
           </Field>
         )}
-        <Field id="gs-org" label={pv.org} error={errors.org} style={{ marginTop: 20 }}>
-          <TextInput id="gs-org" invalid={errors.org} placeholder="acme-platform" value={c.org} onChange={set('org')} />
+        {useApp ? (
+          <Field id="gs-app" label="GitHub connection" error={errors.app}
+            desc={verified ? null : 'Opens GitHub in a new window. Choose your organization and which repositories AWS Transform can access.'}>
+            {verified ? <>
+              <div className="row">
+                <span><Icon n="ok" s={16} /> Connected to <b>github.com/{c.org}</b> through the AWS Connector app.</span>
+                <button className="btn link" onClick={connectApp}>Change</button>
+              </div>
+              <div className="ok-text">{c.appMode === 'select' ? `You gave the app access to ${plural(verified.length, 'selected repository', 'selected repositories')}.` : `The app can access all ${plural(verified.length, 'repository', 'repositories')}.`}</div>
+            </> : <div><button id="gs-app" className="btn" onClick={connectApp} disabled={verifying}>{verifying ? <><Spinner /> Waiting for GitHub…</> : <>Connect to GitHub <Icon n="ext" s={14} /></>}</button></div>}
+            {verifying && <GitHubPopup onClose={() => setVerifying(false)} onInstalled={onInstalled} />}
+          </Field>
+        ) : <>
+        <Field id="gs-org" label={pv.org} optional desc="Leave blank to use every repository the token can access." error={errors.org}>
+          <TextInput id="gs-org" invalid={errors.org} placeholder="e.g. acme-fintech" value={c.org} onChange={set('org')} />
         </Field>
-        <Field id="gs-token" label="Personal access token" error={errors.token}>
-          <TextInput id="gs-token" type="password" invalid={errors.token} placeholder="Paste your personal access token" value={c.token} onChange={set('token')} />
-        </Field>
-        <Alert type="info" title="Why these scopes" style={{ maxWidth: 640, marginTop: 12 }}>
-          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            {pv.scopeWhy.map(([scope, why]) => <li key={scope}><span className="mono">{scope}</span> {why}</li>)}
-          </ul>
-        </Alert>
-        {c.provider === 'github' && (
-          <div className="field" style={{ marginTop: 16 }}>
-            <Choice type="checkbox" checked={c.includePublic} onChange={set('includePublic')} label="Include public repositories"
-              desc="Off by default, so your first scan covers only the private repositories this token can see." />
+        <Field id="gs-token" label="Personal access token" desc="Needs read access to code and write access to pull requests." error={errors.token}>
+          <div className="row">
+            <TextInput id="gs-token" type="password" invalid={errors.token} placeholder="Paste your personal access token" value={c.token} onChange={set('token')} disabled={!!verified} className="grow" />
+            {verified
+              ? <button className="btn" onClick={() => { setVerified(null); setRepoOpen(false); set('token')(''); setTimeout(() => document.getElementById('gs-token')?.focus()); }}>Change</button>
+              : <button className="btn" onClick={verify} disabled={verifying}>{verifying ? <><Spinner /> Verifying…</> : 'Verify'}</button>}
           </div>
-        )}
-        <Field id="gs-name" label="Source name" error={errors.name}
-          hint={!errors.name && `${nameTouched || !c.org ? '' : 'Suggested from your organization. '}1–64 characters: letters, numbers and hyphens.`}>
-          <TextInput id="gs-name" invalid={errors.name} placeholder="acme-platform-github" value={c.name} onChange={v => { setNameTouched(true); set('name')(v); }} />
+          {verified && <div className="ok-text">Verified. This token can access {plural(verified.length, 'repository', 'repositories')}.</div>}
         </Field>
+        </>}
+        <RepoAccess c={c} set={set} via={useApp ? 'app' : 'token'} all={verified} open={repoOpen} setOpen={setRepoOpen} error={errors.repos} />
       </div>
       <WhereItRuns c={c} set={set} open={runsOpen} setOpen={setRunsOpen} errors={errors} stackSt={stackSt} />
       <div className="wiz-actions">
@@ -175,6 +228,77 @@ function ConnectStep({ src, onDone }) {
         <button className="btn link" onClick={cancel}>Cancel</button>
         <button className="btn primary" onClick={connect} disabled={busy}>{busy ? <><Spinner /> Connecting…</> : 'Connect and scan'}</button>
       </div>
+    </div>
+  );
+}
+
+// Which repositories the source covers. Collapsed to a summary until the user chooses to edit.
+function RepoAccess({ c, set, via, all, open, setOpen, error }) {
+  const [q, setQ] = useState('');
+  const gh = c.provider === 'github';
+  const visible = all ? all.filter(r => via === 'app' || c.includePublic || r.vis === 'Private') : [];
+  const nPublic = all ? all.filter(r => r.vis === 'Public').length : 0;
+  const chosen = visible.filter(r => c.selected.includes(r.name));
+  const list = visible.filter(r => r.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const pg = usePager(list.length, 10, q + c.includePublic);
+  const page = pg.slice(list);
+  const kind = gh && via !== 'app' && !c.includePublic ? 'private repositories' : 'repositories';
+  const summary = c.repoMode === 'choose' ? `${chosen.length} of ${visible.length} ${kind} selected.` : `All ${visible.length} ${kind} this ${via === 'app' ? 'connection' : 'token'} can see.`;
+  const toggle = (names, on) => set('selected')(on ? [...new Set([...c.selected, ...names])] : c.selected.filter(n => !names.includes(n)));
+  const allOnPage = page.length > 0 && page.every(r => c.selected.includes(r.name));
+
+  return (
+    <div className="field" id="gs-repos">
+      <div className="spread">
+        <span className="field-label">Repositories</span>
+        {all && <button className="btn link" onClick={() => setOpen(!open)}>{open ? 'Done' : 'Edit'}</button>}
+      </div>
+      {!all ? <div className="muted">{via === 'app' ? 'Available once you connect to GitHub.' : 'Available once the token is verified.'}</div>
+        : !open ? <div className="muted">{summary}</div>
+        : <div className="repo-edit">
+            <div role="radiogroup" aria-label="Repositories">
+              <Choice name="gs-repomode" checked={c.repoMode === 'all'} onChange={() => set('repoMode')('all')}
+                label={`All ${visible.length} ${kind}`} desc="Covers every repository now, and new ones as they're added." />
+              <Choice name="gs-repomode" checked={c.repoMode === 'choose'} onChange={() => { set('repoMode')('choose'); if (!c.selected.length) set('selected')(visible.map(r => r.name)); }}
+                label="Choose repositories" desc="Only the ones you pick are scanned and analyzed." />
+            </div>
+            {gh && via !== 'app' && <>
+              <hr />
+              <Choice type="checkbox" checked={c.includePublic} label={`Include public repositories (${nPublic})`}
+                desc="Off by default, so your first scan covers only the private repositories this token can see."
+                onChange={v => { set('includePublic')(v); if (v && c.repoMode === 'choose') toggle(all.filter(r => r.vis === 'Public').map(r => r.name), true); }} />
+            </>}
+            {c.repoMode === 'choose' && (
+              <div className="repo-pick">
+                <div className="spread" style={{ padding: 12 }}>
+                  <SearchInput value={q} onChange={setQ} placeholder="Find repositories" width="100%" />
+                  <span className="muted" style={{ whiteSpace: 'nowrap' }}>{chosen.length} of {visible.length} selected</span>
+                </div>
+                <table className="tbl">
+                  <thead><tr>
+                    <th className="cb"><input type="checkbox" aria-label="Select all on this page" checked={allOnPage} onChange={e => toggle(page.map(r => r.name), e.target.checked)} /></th>
+                    <th>Repository</th><th>Visibility</th><th>Language</th>
+                  </tr></thead>
+                  <tbody>
+                    {page.length ? page.map(r => {
+                      const on = c.selected.includes(r.name);
+                      return (
+                        <tr key={r.name} className={on ? 'sel clickable' : 'clickable'} onClick={() => toggle([r.name], !on)}>
+                          <td className="cb"><input type="checkbox" aria-label={r.name} checked={on} onChange={() => {}} /></td>
+                          <td><b>{r.name}</b></td><td className="muted">{r.vis}</td><td className="muted">{langOf(r.name)}</td>
+                        </tr>
+                      );
+                    }) : <tr><td colSpan={4} className="empty">No repositories match.</td></tr>}
+                  </tbody>
+                </table>
+                <div className="spread" style={{ padding: '8px 12px' }}>
+                  <span className="small muted">{list.length ? `${(page.length && list.indexOf(page[0]) + 1)}–${list.indexOf(page[page.length - 1]) + 1} of ${list.length}` : '0 of 0'}</span>
+                  {pg.el}
+                </div>
+              </div>
+            )}
+          </div>}
+      <ErrorText msg={error} />
     </div>
   );
 }
@@ -230,76 +354,63 @@ function WhereItRuns({ c, set, open, setOpen, errors, stackSt }) {
 }
 
 /* ---------- step 2 ---------- */
+// Laid out like a run page: progress, early findings as each repository finishes, then what happens next.
 function EstateStep({ src, scan, onPrev, onNext }) {
   const st = aStatus(scan);
-  const done = aDone(scan), n = scan.repos.length;
-  const scope = src.includePublic ? 'repositories' : 'private repositories';
-  const actions = (
-    <div className="wiz-actions">
-      <button className="btn link" onClick={cancel}>Cancel</button>
-      <button className="btn" onClick={onPrev}>Previous</button>
-      <button className="btn primary" onClick={onNext} disabled={st !== 'Completed'}>Set up continuous analysis</button>
-    </div>
-  );
-
   const scanning = st !== 'Completed';
+  const done = aDone(scan), n = scan.repos.length;
+  const pct = Math.round(done / n * 100);
+  const left = Math.max(0, aEnd(scan) - Date.now());
+  const eta = left < 60000 ? 'under a minute' : `about ${plural(Math.ceil(left / 60000), 'minute')}`;
   const states = repoStates(scan);
   const e = estate(scan.repos.filter((_, i) => states[i] === 'Completed'));
-  const maxLang = Math.max(1, ...e.langs.map(l => l.count));
+  const findings = aFindings(scan).sort((a, b) => b.at - a.at);
+  // Newest finding from each repository first, so the preview isn't all one repository.
+  const seen = new Set();
+  const preview = [...findings.filter(f => !seen.has(f.repo) && seen.add(f.repo)), ...findings].filter((f, i, arr) => arr.indexOf(f) === i).slice(0, 6);
+
   return (
     <div className="stack">
-      {scanning ? <>
-        <Head title={`Scanning ${src.org}`}>A quick scan of your package manifests. Results fill in below as each repository is read. We'll use them to recommend which analyses to run.</Head>
-        <Alert type="info" title={`Reading package manifests in ${n} ${scope}…`}>
-          <div className="row" style={{ gap: 16, marginTop: 8 }}><div className="progress grow"><span style={{ width: `${Math.round(done / n * 100)}%` }} /></div><span className="small">{done} of {n}</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}>This usually takes under a minute. You can leave this page; the scan keeps running.</div>
-        </Alert>
-      </> : <>
-        <Head title={`Here's what's in ${src.org}`}>From a quick scan of your package manifests. We'll use this to recommend which analyses to run.</Head>
-        <Alert type="success">Connected to <b>{providerHost(src)}/{src.org}</b>. Scanned {n} {scope}.</Alert>
-        <Alert type="info">This scan only reads manifests. Next, we'll set up the analyses that go deeper, based on what we found here, and keep them running on a schedule.</Alert>
-      </>}
+      {scanning
+        ? <Alert type="success"><b>Quick scan has begun for {src.org}.</b> It reads package manifests only; nothing in your repositories is changed. You can leave this page.</Alert>
+        : <Alert type="success"><b>Quick scan complete for {src.org}.</b> Next, set up the analyses that go deeper and keep them running on a schedule.</Alert>}
+
+      <div>
+        <div className="row" style={{ gap: 12 }}><h1>{scan.name}</h1><span className={`pill ${scanning ? '' : 'ok'}`}>{scanning ? 'In progress' : 'Completed'}</span></div>
+        <p className="muted" style={{ marginTop: 6 }}>{typeName('quick')} · {plural(n, 'repository', 'repositories')} in {providerHost(src)}/{src.org} · Package manifests only</p>
+      </div>
 
       <div className="container">
-        <h2 className="c-header">Estate at a glance{scanning && <span className="counter"> (so far, {done} of {n} repositories)</span>}</h2>
+        <div className="spread c-header"><h2>Quick scan</h2><span className="muted">{scanning ? `Finishes in ${eta}` : 'Finished'}</span></div>
+        <div className="spread"><b>Overall</b><span>{done} of {plural(n, 'repository', 'repositories')} · {pct}%</span></div>
+        <div className="bar" style={{ marginTop: 6 }}><span style={{ width: `${pct}%` }} /></div>
+        <hr className="sep" />
         <div className="stat-row">
           <div className="stat"><div className="k">Repositories scanned</div><div className="v">{e.repos}</div></div>
           <div className="stat"><div className="k">Outdated dependencies</div><div className="v">{e.deps}</div></div>
-          <div className="stat"><div className="k">On end-of-support runtimes</div><div className="v bad">{e.eos}</div><div className="small muted">{e.eosPct}% of repositories</div></div>
-          <div className="stat"><div className="k">Shared libraries</div><div className="v">{e.shared}</div><div className="small muted">Used by other repositories here</div></div>
+          <div className="stat"><div className="k">On end-of-support runtimes</div><div className="v bad">{e.eos}</div></div>
+          <div className="stat"><div className="k">Shared libraries</div><div className="v">{e.shared}</div></div>
         </div>
       </div>
 
       <div className="container">
-        <h2>Exposures detected <span className="counter">({e.exposures.length})</span></h2>
-        <p className="muted" style={{ margin: '4px 0 14px' }}>Runtimes, frameworks and libraries past end of support, and how many of your shared libraries each one touches.</p>
+        <h2>{scanning ? 'Early findings' : 'Findings'} <span className="counter">({findings.length}{scanning ? ' so far' : ''})</span></h2>
+        <p className="muted" style={{ margin: '4px 0 14px' }}>{scanning ? 'Findings appear here as each repository finishes.' : 'The newest findings from the quick scan.'}</p>
         <table className="tbl">
-          <thead><tr><th>Exposure</th><th>Type</th><th>Repositories</th><th>Support status</th><th>Shared libraries affected</th></tr></thead>
+          <thead><tr><th>Finding</th><th>Repository</th><th>Severity</th></tr></thead>
           <tbody>
-            {e.exposures.length ? e.exposures.map(x => (
-              <tr key={x.name}>
-                <td><b>{x.name}</b></td><td>{x.type}</td><td>{x.repos}</td>
-                <td><Status cls="err" icon="err">End of support</Status></td>
-                <td>{x.shared ? `${x.shared} of ${e.shared}` : 'None'}</td>
-              </tr>
-            )) : <tr><td colSpan={5} className="empty">{scanning ? 'None found yet.' : 'No end-of-support runtimes, frameworks or libraries found.'}</td></tr>}
+            {preview.length ? preview.map(f => (
+              <tr key={f.key}><td>{f.title}</td><td>{f.repo}</td><td>{f.sev}</td></tr>
+            )) : <tr><td colSpan={3} className="empty">No findings yet. The first ones appear in a few seconds.</td></tr>}
           </tbody>
         </table>
       </div>
 
-      <div className="container">
-        <h2 className="c-header">By language</h2>
-        {!e.langs.length && <p className="muted">Languages appear here as repositories are read.</p>}
-        {e.langs.map(l => (
-          <div key={l.lang} className="lang-row">
-            <span>{l.label}</span>
-            <div className="bar"><span style={{ width: `${(l.count / maxLang) * 100}%` }} /></div>
-            <span className="muted">{l.count} · {l.eos ? `${l.eos} on ${l.runtime}` : 'all supported'}</span>
-          </div>
-        ))}
+      <div className="wiz-actions">
+        <button className="btn link" onClick={cancel}>Cancel</button>
+        <button className="btn" onClick={onPrev}>Previous</button>
+        <button className="btn primary" onClick={onNext} disabled={scanning}>Set up continuous analysis</button>
       </div>
-
-      {actions}
     </div>
   );
 }
@@ -319,7 +430,10 @@ function ScheduleStep({ src, scan, picked, setPicked, def, setDef, onPrev }) {
       S.onboarding = null;
       return g.id;
     });
-    go(`#/web/cm/runs/${groupId}`);
+    const S = db();
+    const g = S.runs.find(x => x.id === groupId);
+    const left = Math.max(0, ...g.analysisIds.map(id => aEnd(S.analyses.find(x => x.id === id))) ) - Date.now();
+    go('#/web/cm/analyses', { type: 'success', text: <><b>Continuous analysis started.</b> The quick scan found {plural(aFindings(scan).length, 'finding')}. The rest finish in {left < 60000 ? 'under a minute' : `about ${plural(Math.ceil(left / 60000), 'minute')}`}. <a href="#/web/cm/findings">View findings</a></> });
   }
 
   return (
@@ -327,7 +441,7 @@ function ScheduleStep({ src, scan, picked, setPicked, def, setDef, onPrev }) {
       <Head title="Schedule and run">Here's how we'll keep {src.org} current, based on your scan. Each analysis starts today and repeats on the schedule below. Change anything you need to.</Head>
       <ScheduleTable org={src.org} types={types} freqs={freqs} setFreq={(t, v) => setFreqs(f => ({ ...f, [t]: v }))}
         intro="Your code, its dependencies and the threats against them change every week. These analyses re-run on their own, so your findings always match your estate today, not the day you first scanned it. You'll only hear about what's new or changed."
-        onAdd={t => setPicked(p => [...p, t])} onRemove={t => setPicked(p => p.filter(x => x !== t))} why={(t, f) => whyFromScan(t, e, f)}
+        onAdd={t => setPicked(p => [...p, t])} onRemove={t => setPicked(p => p.filter(x => x !== t))} why={t => whyFromScan(t, e)}
         def={def} setDef={setDef} day={day} setDay={setDay} time={time} setTime={setTime} />
       <ReviewBox src={src} types={types} freqs={freqs} day={day} time={time} repos={src.repos.length} />
       <div className="wiz-actions">
